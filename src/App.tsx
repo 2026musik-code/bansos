@@ -1020,7 +1020,7 @@ export default function App() {
                 {/* QR Code Placeholder */}
                 <div className="bg-[#161618] border border-white/5 rounded-2xl p-6 mb-6 flex flex-col items-center justify-center">
                   <h4 className="text-white font-bold mb-4 flex items-center gap-2"><QrCode className="w-5 h-5 text-amber-500"/> QR Akses Khusus</h4>
-                  <div className="w-full max-w-[280px] bg-white p-3 rounded-xl flex items-center justify-center">
+                  <div className="w-full bg-white p-4 rounded-xl flex items-center justify-center">
                     <img src={limitData?.qrImage || "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=example_qr"} alt="QR" className="w-full h-auto aspect-square object-contain" />
                   </div>
                   <p className="text-xs text-slate-500 text-center mt-4 text-amber-500/80">Silakan scan kode QR ini untuk info lebih lanjut atau upgrade akun.</p>
@@ -1097,7 +1097,7 @@ export default function App() {
                   </p>
                   
                   {limitData?.qrImage && (
-                    <div className="bg-white p-3 rounded-xl mb-6 mx-auto w-full max-w-[280px]">
+                    <div className="bg-white p-4 rounded-xl mb-6 mx-auto w-full">
                       <img src={limitData.qrImage} alt="QR Code" className="w-full h-auto aspect-square object-contain" />
                     </div>
                   )}
