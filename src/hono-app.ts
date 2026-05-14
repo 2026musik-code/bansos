@@ -4,6 +4,7 @@ import { cors } from 'hono/cors';
 export type Bindings = {
   patungan: any; // Cloudflare KV 
   vpsai: any;       // Cloudflare R2
+  ASSETS?: any;     // Cloudflare Worker Assets Fallback
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -235,6 +236,15 @@ app.get('/api/cors-proxy', async (c) => {
   }
 
   return new Response(response.body, { headers, status: response.status });
+});
+
+app.get('*', async (c) => {
+  if (c.env.ASSETS) {
+    const url = new URL(c.req.url);
+    url.pathname = '/';
+    return await c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
+  }
+  return c.notFound();
 });
 
 export default app;
