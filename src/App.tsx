@@ -89,10 +89,19 @@ export default function App() {
 
   // Ping tracking to get user info on mount/view profile
   useEffect(() => {
+    const getDeviceId = () => {
+      let did = localStorage.getItem('deviceId');
+      if (!did) {
+        did = 'uid_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+        localStorage.setItem('deviceId', did);
+      }
+      return did;
+    };
+
     fetch('/api/track', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'ping' })
+      body: JSON.stringify({ action: 'ping', deviceId: getDeviceId() })
     })
       .then(res => res.json())
       .then(data => setLimitData(data))
@@ -260,10 +269,13 @@ export default function App() {
   const handlePlayEpisode = async (episode: any) => {
     // Check limit first
     try {
+       const deviceId = localStorage.getItem('deviceId') || ('uid_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9));
+       localStorage.setItem('deviceId', deviceId);
+       
        const trackRes = await fetch('/api/track', {
          method: 'POST',
          headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify({ action: 'play' })
+         body: JSON.stringify({ action: 'play', deviceId })
        });
        if (trackRes.ok) {
          const data = await trackRes.json();

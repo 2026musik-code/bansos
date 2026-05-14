@@ -194,17 +194,29 @@ app.post('/api/admin/users/:id', adminAuth, async (c) => {
 
 app.post('/api/track', async (c) => {
   const body = await c.req.json();
+  const deviceId = body.deviceId;
   const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || '127.0.0.1';
   // Jika x-forwarded-for mengandung multiple IP, ambil yang pertama
   const realIp = ip.split(',')[0].trim();
   const userAgent = c.req.header('user-agent') || 'unknown';
   
   const config = await getConfig(c.env);
-  let user = config.users.find((u: any) => u.ip === realIp && u.userAgent === userAgent);
+  
+  let user = null;
+  // Coba cari dng deviceId dulu (lebih persisten dari IP)
+  if (deviceId) {
+    user = config.users.find((u: any) => u.deviceId === deviceId);
+  }
+  
+  // Fallback ke IP + UserAgent jika tidak ada cookie/deviceId (mirip sistem lama)
+  if (!user) {
+    user = config.users.find((u: any) => u.ip === realIp && u.userAgent === userAgent);
+  }
   
   if (!user) {
     user = {
       id: Date.now().toString(),
+      deviceId: deviceId || ('uid_' + Date.now()),
       ip: realIp,
       userAgent,
       limit: 10, // Default limit gratis
@@ -213,6 +225,13 @@ app.post('/api/track', async (c) => {
     };
     config.users.push(user);
   } else {
+    // Update deviceId / IP agar sinkron
+    if (deviceId && !user.deviceId) {
+      user.deviceId = deviceId;
+    }
+    user.ip = realIp;
+    user.userAgent = userAgent;
+    
     user.lastActive = new Date().toISOString();
     // Hitungan play (streaming mulai)
     if (body.action === 'play') {
