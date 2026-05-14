@@ -7,7 +7,7 @@ import Hls from 'hls.js';
 type ViewState = 'home' | 'details' | 'player' | 'history';
 
 // Simple HLS Player Component
-const HlsPlayer = ({ src, className, style }: { src: string, className?: string, style?: any }) => {
+const HlsPlayer = ({ src, className, style, onEnded }: { src: string, className?: string, style?: any, onEnded?: () => void }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -38,7 +38,7 @@ const HlsPlayer = ({ src, className, style }: { src: string, className?: string,
     };
   }, [src]);
 
-  return <video ref={videoRef} className={className} style={style} controls playsInline />;
+  return <video ref={videoRef} className={className} style={style} controls playsInline onEnded={onEnded} />;
 };
 
 export default function App() {
@@ -56,6 +56,7 @@ export default function App() {
 
   const [streamData, setStreamData] = useState<any | null>(null);
   const [isLoadingStream, setIsLoadingStream] = useState(false);
+  const [currentEpisode, setCurrentEpisode] = useState<any | null>(null);
 
   const [trendingDramas, setTrendingDramas] = useState<any[]>([]);
   const [isLoadingTrending, setIsLoadingTrending] = useState(false);
@@ -160,7 +161,7 @@ export default function App() {
     });
     
     // Attempt to get the ID
-    const dramaId = drama.id || drama.link || drama.url;
+    const dramaId = drama.id || drama.link || drama.url || drama.fakeId || drama.videoFakeId;
     
     try {
       if (dramaId) {
@@ -170,8 +171,17 @@ export default function App() {
         let episodeList: any[] = [];
         if (Array.isArray(data)) episodeList = data;
         else if (data && Array.isArray(data.data)) episodeList = data.data;
+        else if (data && data.data && typeof data.data === 'object') {
+          // Handle object type where episodes are values (e.g. freereels)
+          episodeList = Object.values(data.data);
+        }
         else if (data && Array.isArray(data.episodes)) episodeList = data.episodes;
         
+        // Final fallback: if no episodes returned but drama itself has episodes array
+        if (episodeList.length === 0 && drama.episodes && Array.isArray(drama.episodes)) {
+          episodeList = drama.episodes;
+        }
+
         setEpisodes(episodeList);
       } else {
         // Fallback if API directly gives episodes in the drama object
@@ -191,6 +201,7 @@ export default function App() {
     setView('player');
     setIsLoadingStream(true);
     setStreamData(null);
+    setCurrentEpisode(episode);
     
     // Determine episode ID
     const epId = episode.videoFakeId || episode.id || episode.link || episode.url || episode.chapter_id;
@@ -203,6 +214,24 @@ export default function App() {
       console.error("Stream error:", err);
     } finally {
       setIsLoadingStream(false);
+    }
+  };
+
+  const getCurrentEpisodeIndex = () => {
+    if (!currentEpisode || episodes.length === 0) return -1;
+    const epId = currentEpisode.videoFakeId || currentEpisode.id || currentEpisode.link || currentEpisode.url || currentEpisode.chapter_id;
+    return episodes.findIndex(ep => {
+      const id = ep.videoFakeId || ep.id || ep.link || ep.url || ep.chapter_id;
+      return id === epId;
+    });
+  };
+
+  const handleNextEpisode = () => {
+    const currentIndex = getCurrentEpisodeIndex();
+    if (currentIndex !== -1 && currentIndex < episodes.length - 1) {
+      handlePlayEpisode(episodes[currentIndex + 1]);
+    } else {
+      setView('details');
     }
   };
 
@@ -646,17 +675,30 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 className="w-full flex flex-col h-full bg-black z-50 absolute inset-0"
               >
-                <div className="flex items-center justify-between p-4 bg-gradient-to-b from-black/80 to-transparent absolute top-0 w-full z-10">
-                  <div className="flex flex-col">
+                <div className="flex items-center justify-between p-4 bg-gradient-to-b from-black/80 to-transparent absolute top-0 w-full z-10 pointer-events-none">
+                  <div className="flex flex-col flex-1 truncate mr-4">
                     <span className="text-[10px] text-amber-500 font-bold uppercase tracking-widest drop-shadow-md">Now Playing</span>
-                    <h2 className="text-sm font-bold text-white line-clamp-1 drop-shadow-md">{selectedDrama ? getTitle(selectedDrama) : 'Video Stream'}</h2>
+                    <h2 className="text-sm font-bold text-white truncate drop-shadow-md">
+                      {selectedDrama ? getTitle(selectedDrama) : 'Video Stream'} 
+                      {currentEpisode ? ` - ${getTitle(currentEpisode) || `Eps ${getCurrentEpisodeIndex() + 1}`}` : ''}
+                    </h2>
                   </div>
-                  <button 
-                    onClick={() => setView('details')}
-                    className="flex items-center justify-center w-8 h-8 bg-black/50 backdrop-blur-md rounded-full text-white hover:bg-white/20 transition-colors"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
+                  <div className="flex items-center gap-2 pointer-events-auto">
+                    {getCurrentEpisodeIndex() !== -1 && getCurrentEpisodeIndex() < episodes.length - 1 && (
+                      <button
+                        onClick={handleNextEpisode}
+                        className="flex items-center justify-center px-3 py-1.5 bg-amber-500 text-black text-xs font-bold rounded-lg hover:bg-amber-400 transition-colors shrink-0"
+                      >
+                        Berikutnya
+                      </button>
+                    )}
+                    <button 
+                      onClick={() => setView('details')}
+                      className="flex items-center justify-center w-8 h-8 bg-black/50 backdrop-blur-md rounded-full text-white hover:bg-white/20 transition-colors shrink-0"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
                 
                 <div className="flex-1 w-full flex items-center justify-center relative">
@@ -672,6 +714,7 @@ export default function App() {
                           key={getStreamUrl(streamData)!}
                           src={getStreamUrl(streamData)!}
                           className="w-full h-full object-contain"
+                          onEnded={handleNextEpisode}
                         />
                       ) : (
                         <video 
@@ -680,6 +723,7 @@ export default function App() {
                           controls
                           playsInline
                           className="w-full h-full object-contain"
+                          onEnded={handleNextEpisode}
                         />
                       )
                     ) : (
