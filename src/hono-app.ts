@@ -30,8 +30,12 @@ app.use('/api/*', async (c, next) => {
   // Cek validitas Origin
   if (origin) {
     try {
-      const originHost = new URL(origin).host;
-      if (originHost !== host && !originHost.includes('localhost') && !originHost.includes('run.app')) {
+      const originHostname = new URL(origin).hostname;
+      const cleanHost = host?.split(':')[0] || '';
+      
+      // Jika domain origin berbeda dengan domain host (mengabaikan www atau subdomain jika tidak persis, kita pakai includes saja untuk amannya)
+      // Idealnya disamakan, tapi misal: cleanHost "cutad.web.id", originHostname "www.cutad.web.id"
+      if (!originHostname.includes(cleanHost) && !cleanHost.includes(originHostname) && !originHostname.includes('localhost') && !originHostname.includes('run.app')) {
         return c.json({ error: "Access Denied: Invalid Origin" }, 403);
       }
     } catch (e) {}
@@ -46,8 +50,9 @@ app.use('/api/*', async (c, next) => {
     }
   } else if (referer) {
     try {
-      const refererHost = new URL(referer).host;
-      if (refererHost !== host && !refererHost.includes('localhost') && !refererHost.includes('run.app')) {
+      const refererHostname = new URL(referer).hostname;
+      const cleanHost = host?.split(':')[0] || '';
+      if (!refererHostname.includes(cleanHost) && !cleanHost.includes(refererHostname) && !refererHostname.includes('localhost') && !refererHostname.includes('run.app')) {
         return c.json({ error: "Access Denied: Invalid Referer" }, 403);
       }
     } catch (e) {}
@@ -351,6 +356,17 @@ app.get('/api/cors-proxy', async (c) => {
 
 app.get('*', async (c) => {
   if (c.env.ASSETS) {
+    try {
+      // Coba fetch asset sesuai path asli (CSS, JS, gambar, dll)
+      const res = await c.env.ASSETS.fetch(c.req.raw);
+      if (res && res.status < 400) {
+        return res;
+      }
+    } catch (e) {
+      console.error("Asset fetch error:", e);
+    }
+    
+    // Jika tidak ditemukan (SPA mode), fallback ke index.html
     const url = new URL(c.req.url);
     url.pathname = '/';
     return await c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
