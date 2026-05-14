@@ -27,35 +27,14 @@ app.use('/api/*', async (c, next) => {
 
   console.log(`[Anti-Scraper] Path: ${path} | Origin: ${origin} | Referer: ${referer} | Host: ${host}`);
 
-  // Cek validitas Origin
-  if (origin) {
-    try {
-      const originHostname = new URL(origin).hostname;
-      const cleanHost = host?.split(':')[0] || '';
-      
-      // Jika domain origin berbeda dengan domain host (mengabaikan www atau subdomain jika tidak persis, kita pakai includes saja untuk amannya)
-      // Idealnya disamakan, tapi misal: cleanHost "cutad.web.id", originHostname "www.cutad.web.id"
-      if (!originHostname.includes(cleanHost) && !cleanHost.includes(originHostname) && !originHostname.includes('localhost') && !originHostname.includes('run.app')) {
-        return c.json({ error: "Access Denied: Invalid Origin" }, 403);
-      }
-    } catch (e) {}
-  } 
   // Cek Referer jika Origin tidak ada (melindungi dari direct curl/postman)
-  else if (!referer) {
+  if (!origin && !referer) {
     // Pada environment dev (misal AI Studio mode iframe), referer bisa saja tidak dikirim.
     // Kita skip strict check referer ini jika requestnya ada user-agent dari browser umum.
     const ua = c.req.header('user-agent') || '';
     if (!path.startsWith('/api/cors-proxy') && !path.startsWith('/api/admin') && !ua.includes('Mozilla')) {
       return c.json({ error: "Access Denied: No Referer" }, 403);
     }
-  } else if (referer) {
-    try {
-      const refererHostname = new URL(referer).hostname;
-      const cleanHost = host?.split(':')[0] || '';
-      if (!refererHostname.includes(cleanHost) && !cleanHost.includes(refererHostname) && !refererHostname.includes('localhost') && !refererHostname.includes('run.app')) {
-        return c.json({ error: "Access Denied: Invalid Referer" }, 403);
-      }
-    } catch (e) {}
   }
 
   // ---- MEKANISME IP+COOKIE+USERAGENT LOCK ----
@@ -356,22 +335,9 @@ app.get('/api/cors-proxy', async (c) => {
 
 app.get('*', async (c) => {
   if (c.env.ASSETS) {
-    // Gunakan URL yang dimodifikasi host-nya ke localhost agar env.ASSETS (Cloudflare Workers) 
-    // tidak bingung saat request datang dari Custom Domain.
-    const url = new URL(c.req.url);
-    url.hostname = 'localhost';
-    url.protocol = 'http:';
-
-    const reqOptions = {
-        method: c.req.method,
-        headers: new Headers(c.req.raw.headers)
-    };
-    reqOptions.headers.delete('host');
-
     try {
-      // Coba fetch asset sesuai path asli (CSS, JS, gambar, dll)
-      const reqAssets = new Request(url.toString(), reqOptions);
-      const res = await c.env.ASSETS.fetch(reqAssets);
+      // 1. Coba fetch asset sesuai path yang dikirim oleh browser (untuk .js, .css, dll)
+      const res = await c.env.ASSETS.fetch(c.req.raw);
       if (res && res.status < 400) {
         return res;
       }
@@ -379,9 +345,11 @@ app.get('*', async (c) => {
       console.error("Asset fetch error:", e);
     }
     
-    // Jika tidak ditemukan (SPA mode), fallback ke index.html
+    // 2. Jika path tidak ditemukan (untuk SPA navigation), fallback ke index.html
+    const url = new URL(c.req.url);
     url.pathname = '/';
-    return await c.env.ASSETS.fetch(new Request(url.toString(), reqOptions));
+    // Kita panggil ulang dengan Request baru pada '/'
+    return await c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
   }
   return c.notFound();
 });
