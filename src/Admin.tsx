@@ -275,12 +275,12 @@ export default function Admin() {
            <div className="grid gap-3">
              {config?.users && config.users.length > 0 ? [...config.users].reverse().map((u: any) => (
                 <div key={u.id} className="bg-[#161618] border border-white/5 rounded-2xl p-4 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
-                  <div className="space-y-1 w-full sm:w-auto">
-                    <div className="flex items-center gap-2">
-                       <span className="font-mono text-sm font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded">{u.ip}</span>
-                       <span className="text-[10px] text-slate-500 font-medium">{new Date(u.lastActive).toLocaleString()}</span>
+                  <div className="space-y-1 w-full sm:w-[calc(100%-120px)] overflow-hidden">
+                    <div className="flex flex-wrap items-center gap-2">
+                       <span className="font-mono text-sm font-bold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded break-all">{u.ip}</span>
+                       <span className="text-[10px] text-slate-500 font-medium whitespace-nowrap">{new Date(u.lastActive).toLocaleString()}</span>
                     </div>
-                    <p className="text-xs text-slate-400 mt-1 line-clamp-1 max-w-sm" title={u.userAgent}>{u.userAgent}</p>
+                    <p className="text-xs text-slate-400 mt-1 line-clamp-1 max-w-full break-all" title={u.userAgent}>{u.userAgent}</p>
                   </div>
                   
                   <div className="flex items-center gap-3 w-full sm:w-auto justify-between sm:justify-end">
