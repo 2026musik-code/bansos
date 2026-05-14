@@ -298,9 +298,22 @@ export default function Admin() {
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                      </div>
-                     <button onClick={() => handleDeleteUser(u.id)} className="bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white p-2.5 rounded-xl border border-red-500/20 hover:border-red-500 transition-all">
-                       <Trash2 className="w-4 h-4" />
-                     </button>
+                     <div className="flex items-center gap-2">
+                        <button onClick={() => {
+                          if (confirm("Blokir user ini? Limit mereka akan di-set ke 0 sehingga tidak bisa menonton.")) {
+                            handleUpdateLimit(u.id, 0);
+                          }
+                        }} title="Blokir User (Set limit ke 0)" className="bg-orange-500/10 text-orange-500 hover:bg-orange-500 hover:text-white p-2.5 rounded-xl border border-orange-500/20 hover:border-orange-500 transition-all">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>
+                        </button>
+                        <button onClick={() => {
+                          if (confirm("Hapus riwayat user ini? (Mereka akan dianggap sebagai user baru dan mendapat jatah limit gratis lagi jika berkunjung kembali)")) {
+                            handleDeleteUser(u.id);
+                          }
+                        }} title="Hapus Riwayat (Akan mereset limit jika mereka datang lagi)" className="bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white p-2.5 rounded-xl border border-red-500/20 hover:border-red-500 transition-all">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                     </div>
                   </div>
                 </div>
              )) : (

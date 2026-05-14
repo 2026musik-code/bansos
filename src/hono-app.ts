@@ -40,7 +40,7 @@ app.use('/api/*', async (c, next) => {
   // ---- MEKANISME IP+COOKIE+USERAGENT LOCK ----
   // Abaikan admin route dari lock
   if (!path.startsWith('/api/admin')) {
-    const ip = c.req.header('x-forwarded-for') || c.req.header('cf-connecting-ip') || 'unknown-ip';
+    const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || 'unknown-ip';
     const ua = c.req.header('user-agent') || 'unknown-ua';
     // Disederhanakan untuk menghindari error di dalam iFrame (di mana cookies sering di-block oleh browser)
     // Kita gunakan simple logging activity saja atau rate limiting ringan tanpa blokir keras
@@ -194,16 +194,18 @@ app.post('/api/admin/users/:id', adminAuth, async (c) => {
 
 app.post('/api/track', async (c) => {
   const body = await c.req.json();
-  const ip = c.req.header('x-forwarded-for') || '127.0.0.1';
+  const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || '127.0.0.1';
+  // Jika x-forwarded-for mengandung multiple IP, ambil yang pertama
+  const realIp = ip.split(',')[0].trim();
   const userAgent = c.req.header('user-agent') || 'unknown';
   
   const config = await getConfig(c.env);
-  let user = config.users.find((u: any) => u.ip === ip && u.userAgent === userAgent);
+  let user = config.users.find((u: any) => u.ip === realIp && u.userAgent === userAgent);
   
   if (!user) {
     user = {
       id: Date.now().toString(),
-      ip,
+      ip: realIp,
       userAgent,
       limit: 10, // Default limit gratis
       dataLimit: 0,
