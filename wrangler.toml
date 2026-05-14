@@ -8,8 +8,8 @@ directory = "dist"
 
 [[kv_namespaces]]
 binding = "patungan"
-id = "<ISIKAN_ID_KV_PATUNGAN>"
+id = "518e56aeb4354c49b019cd4ab920f33f"
 
 [[r2_buckets]]
 binding = "vpsai"
-bucket_name = "<ISIKAN_NAMA_BUCKET_VPSAI>"
+bucket_name = "vpsai"
