@@ -1,129 +1,99 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
+import fs from "fs";
+import honoApp from "./src/hono-app.ts"; 
 
-const API_KEY = "cutad_98e7ba3c88fdfe5526740ed69f59fc71267f4a69";
-const BASE_URL = "https://www.cutad.web.id/api/public";
+// --- SIMULASI CLOUDFLARE KV & R2 UNTUK AI STUDIO ---
+// Di Cloudflare Workers, ini disediakan lewat environment bindings
+const patunganKV = {
+  get: async (key: string) => {
+    const dbPath = path.join(process.cwd(), 'kv-patungan.json');
+    if (!fs.existsSync(dbPath)) return null;
+    const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+    return db[key] || null;
+  },
+  put: async (key: string, value: string) => {
+    const dbPath = path.join(process.cwd(), 'kv-patungan.json');
+    let db: any = {};
+    if (fs.existsSync(dbPath)) db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+    db[key] = value;
+    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+  },
+  delete: async (key: string) => {
+    const dbPath = path.join(process.cwd(), 'kv-patungan.json');
+    if (!fs.existsSync(dbPath)) return;
+    const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+    delete db[key];
+    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+  }
+};
+
+const vpsaiR2 = {
+  get: async (key: string) => {
+    const dbPath = path.join(process.cwd(), 'r2-vpsai.json');
+    if (!fs.existsSync(dbPath)) return null;
+    const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+    if (!db[key]) return null;
+    return {
+      text: async () => db[key],
+      json: async () => JSON.parse(db[key])
+    };
+  },
+  put: async (key: string, value: string) => {
+    const dbPath = path.join(process.cwd(), 'r2-vpsai.json');
+    let db: any = {};
+    if (fs.existsSync(dbPath)) db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+    db[key] = value;
+    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+  },
+  delete: async (key: string) => {
+    const dbPath = path.join(process.cwd(), 'r2-vpsai.json');
+    if (!fs.existsSync(dbPath)) return;
+    const db = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
+    delete db[key];
+    fs.writeFileSync(dbPath, JSON.stringify(db, null, 2));
+  }
+};
+
+const env = { patungan: patunganKV, vpsai: vpsaiR2 };
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // API Routes
-  app.get("/api/providers", async (req, res) => {
+  app.use(express.json({ limit: "10mb" }));
+
+  // ALL /api requests dirutekan ke Hono App
+  app.all('/api/*', async (req, res) => {
     try {
-      const response = await fetch(`${BASE_URL}?key=${API_KEY}`);
-      const data = await response.json();
-      res.json(data);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: "Failed to fetch providers" });
-    }
-  });
-
-  app.get("/api/search/:provider", async (req, res) => {
-    try {
-      const { provider } = req.params;
-      const { q } = req.query;
-      const url = `${BASE_URL}/${provider}?action=search&q=${encodeURIComponent(
-        q as string
-      )}&key=${API_KEY}`;
-      const response = await fetch(url);
-      const data = await response.json();
-      res.json(data);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: "Failed to search" });
-    }
-  });
-
-  app.get("/api/rank/:provider", async (req, res) => {
-    try {
-      const { provider } = req.params;
-      const url = `${BASE_URL}/${provider}?action=rank&key=${API_KEY}`;
-      const response = await fetch(url);
-      const data = await response.json();
-      res.json(data);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: "Failed to fetch rank" });
-    }
-  });
-
-  app.get("/api/episodes/:provider", async (req, res) => {
-    try {
-      const { provider } = req.params;
-      const { id } = req.query;
-      const url = `${BASE_URL}/${provider}?action=episodes&id=${encodeURIComponent(id as string)}&key=${API_KEY}`;
-      const response = await fetch(url);
-      const data = await response.json();
-      res.json(data);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: "Failed to fetch episodes" });
-    }
-  });
-
-  app.get("/api/stream/:provider", async (req, res) => {
-    try {
-      const { provider } = req.params;
-      const { id } = req.query;
-      const url = `${BASE_URL}/${provider}?action=stream&id=${encodeURIComponent(id as string)}&key=${API_KEY}`;
-      const response = await fetch(url);
-      const data = await response.json();
-      res.json(data);
-    } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: "Failed to fetch stream" });
-    }
-  });
-
-  // CORS Proxy for HLS streams (m3u8 playlists and ts chunks)
-  app.get("/api/cors-proxy", async (req, res) => {
-    try {
-      const targetUrl = req.query.url as string;
-      if (!targetUrl) return res.status(400).send("URL is required");
-
-      const response = await fetch(targetUrl);
-      
-      const contentType = response.headers.get("content-type");
-      if (contentType) {
-        res.setHeader("Content-Type", contentType);
-      }
-      res.setHeader("Access-Control-Allow-Origin", "*");
-
-      if (targetUrl.includes(".m3u8")) {
-        const text = await response.text();
-        const baseUrl = new URL(".", targetUrl).href;
-        
-        // Rewrite all chunk URLs to go through the proxy
-        const lines = text.split('\n').map(line => {
-          if (line.trim() && !line.startsWith("#")) {
-            // It's a segment URL
-            const segmentUrl = line.startsWith("http") ? line : new URL(line.trim(), baseUrl).href;
-            return `/api/cors-proxy?url=${encodeURIComponent(segmentUrl)}`;
-          }
-          // Also rewrite URI attributes in tags
-          if (line.includes('URI="')) {
-            return line.replace(/URI="([^"]+)"/g, (match, p1) => {
-              if (p1.startsWith("data:")) return match;
-              const uri = p1.startsWith("http") ? p1 : new URL(p1, baseUrl).href;
-              return `URI="/api/cors-proxy?url=${encodeURIComponent(uri)}"`;
-            });
-          }
-          return line;
-        });
-        
-        res.send(lines.join('\n'));
-      } else {
-        // Stream other files like .ts directly
-        if (!response.body) return res.status(500).send("No body");
-        const arrayBuffer = await response.arrayBuffer();
-        res.send(Buffer.from(arrayBuffer));
-      }
-    } catch (error) {
-      console.error("Proxy error:", error);
-      res.status(500).json({ error: "Failed to proxy request" });
+       const url = `http://${req.headers.host}${req.url}`;
+       const init: RequestInit = {
+         method: req.method,
+         headers: req.headers as HeadersInit,
+       };
+       
+       if (req.method !== 'GET' && req.method !== 'HEAD') {
+         if (req.body && Object.keys(req.body).length > 0) {
+           init.body = JSON.stringify(req.body);
+         }
+       }
+       
+       const webReq = new Request(url, init);
+       
+       // Panggil Hono Worker dengan mock env
+       const response = await honoApp.fetch(webReq, env);
+       
+       // Pass Headers & Status via Express
+       response.headers.forEach((value, key) => res.setHeader(key, value));
+       res.status(response.status);
+       
+       const arrayBuffer = await response.arrayBuffer();
+       res.send(Buffer.from(arrayBuffer));
+       
+    } catch (e) {
+       console.error(e);
+       res.status(500).send("Hono Adapter Error");
     }
   });
 
@@ -135,10 +105,10 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(process.cwd(), "dist");
+    const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 

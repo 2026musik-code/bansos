@@ -1,10 +1,10 @@
 import { useState, useEffect, FormEvent, useRef } from 'react';
-import { Search, Play, Tv, ChevronLeft, X, LayoutGrid, Crown, Loader2, Sparkles, Popcorn } from 'lucide-react';
+import { Search, Play, Tv, ChevronLeft, X, LayoutGrid, Crown, Loader2, Sparkles, Popcorn, User, Key, Globe, Smartphone, MessageCircle, Send, QrCode } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import Hls from 'hls.js';
 
 // --- Types (Flexible to accommodate unknown API schemas) ---
-type ViewState = 'home' | 'details' | 'player' | 'history';
+type ViewState = 'home' | 'details' | 'player' | 'history' | 'categories' | 'profile';
 
 // Simple HLS Player Component
 const HlsPlayer = ({ src, className, style, onEnded }: { src: string, className?: string, style?: any, onEnded?: () => void }) => {
@@ -61,7 +61,34 @@ export default function App() {
   const [trendingDramas, setTrendingDramas] = useState<any[]>([]);
   const [isLoadingTrending, setIsLoadingTrending] = useState(false);
   const [history, setHistory] = useState<any[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const [profileData, setProfileData] = useState({ ip: 'Loading...', userAgent: 'Loading...' });
+  const [limitData, setLimitData] = useState<{ exceeded: boolean, popupText: string, qrImage: string, user: any } | null>(null);
+  const [showLimitPopup, setShowLimitPopup] = useState(false);
+
+  // Ping tracking to get user info on mount/view profile
+  useEffect(() => {
+    fetch('/api/track', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'ping' })
+    })
+      .then(res => res.json())
+      .then(data => setLimitData(data))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (view === 'profile') {
+      setProfileData(prev => ({ ...prev, userAgent: navigator.userAgent }));
+      fetch('https://api.ipify.org?format=json')
+        .then(res => res.json())
+        .then(data => setProfileData(prev => ({ ...prev, ip: data.ip })))
+        .catch(() => setProfileData(prev => ({ ...prev, ip: 'Unknown' })));
+    }
+  }, [view]);
 
   // 1. Fetch Providers
   useEffect(() => {
@@ -198,6 +225,23 @@ export default function App() {
 
   // 4. Select Episode -> Fetch Stream
   const handlePlayEpisode = async (episode: any) => {
+    // Check limit first
+    try {
+       const trackRes = await fetch('/api/track', {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ action: 'play' })
+       });
+       if (trackRes.ok) {
+         const data = await trackRes.json();
+         setLimitData(data);
+         if (data.exceeded) {
+           setShowLimitPopup(true);
+           return;
+         }
+       }
+    } catch(e) {}
+
     setView('player');
     setIsLoadingStream(true);
     setStreamData(null);
@@ -239,7 +283,50 @@ export default function App() {
   const goBack = () => {
     if (view === 'player') setView('details');
     else if (view === 'details') setView('home');
+    else if (view === 'categories' && selectedCategory) setSelectedCategory(null);
+    else if (view === 'categories') setView('home');
   };
+
+  // --- COMPUTE CATEGORIES ---
+  const getCategoriesList = () => {
+    const categoriesMap = new Map<string, number>();
+    trendingDramas.forEach(drama => {
+      const cats: string[] = [];
+      if (drama.tags) cats.push(...drama.tags);
+      if (drama.labels) cats.push(...drama.labels);
+      if (drama.category) cats.push(drama.category);
+      if (drama.type) cats.push(drama.type);
+      
+      const validCats = cats.filter(c => typeof c === 'string' && c.trim() !== '');
+      
+      if (validCats.length === 0) {
+        categoriesMap.set('Umum', (categoriesMap.get('Umum') || 0) + 1);
+      } else {
+        validCats.forEach(c => {
+          const key = c.trim();
+          categoriesMap.set(key, (categoriesMap.get(key) || 0) + 1);
+        });
+      }
+    });
+    return Array.from(categoriesMap.entries()).sort((a, b) => b[1] - a[1]);
+  };
+  
+  const categoriesList = getCategoriesList();
+  const categoryDramas = selectedCategory 
+    ? trendingDramas.filter(d => {
+        const cats = [
+          ...(d.tags || []), 
+          ...(d.labels || []), 
+          d.category, 
+          d.type
+        ].filter(c => typeof c === 'string' && c.trim() !== '').map(c => c.trim());
+        
+        if (selectedCategory === 'Umum') {
+          return cats.length === 0;
+        }
+        return cats.includes(selectedCategory);
+      })
+    : [];
 
   // --- RENDERING ---
 
@@ -649,6 +736,100 @@ export default function App() {
               </motion.div>
             )}
 
+            {view === 'categories' && (
+              <motion.div
+                key="categories"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                className="w-full mx-auto pb-20 px-4 py-4 space-y-4"
+              >
+                {!selectedCategory ? (
+                  <>
+                    <h2 className="text-xl font-bold text-white mb-2">Kategori</h2>
+                    
+                    {/* Provider Selection */}
+                    {providers.length > 0 && (
+                      <div className="flex overflow-x-auto no-scrollbar gap-2 items-center mb-4 pb-2">
+                        {providers.map((p, i) => {
+                          const val = p.id || p.name || p;
+                          const name = p.name || p.id || p;
+                          const display = typeof name === 'string' ? name.toUpperCase() : val;
+                          const isActive = selectedProvider === val;
+                          return (
+                            <button
+                              key={`cat-prov-${val}-${i}`}
+                              onClick={() => setSelectedProvider(val)}
+                              className={`shrink-0 px-4 py-2 rounded-xl font-bold text-[10px] sm:text-xs tracking-wider transition-all border ${
+                                isActive 
+                                  ? 'bg-amber-500 text-black border-amber-500 shadow-[0_4px_15px_rgba(245,158,11,0.2)]' 
+                                  : 'bg-[#161618] text-slate-400 border-white/5 hover:border-white/20'
+                              }`}
+                            >
+                              {display}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {isLoadingTrending ? (
+                      <div className="flex justify-center py-10 text-amber-500">
+                        <Loader2 className="w-8 h-8 animate-spin" />
+                      </div>
+                    ) : categoriesList.length > 0 ? (
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        {categoriesList.map(([cat, count]) => (
+                          <div 
+                            key={cat} 
+                            onClick={() => setSelectedCategory(cat)}
+                            className="bg-[#121214] border border-white/5 hover:border-amber-500/50 p-4 rounded-xl cursor-pointer flex flex-col items-center justify-center text-center transition-all group"
+                          >
+                            <span className="text-white font-bold text-sm mb-1 group-hover:text-amber-500 transition-colors">{cat}</span>
+                            <span className="text-slate-500 text-[10px] bg-black/30 px-2 py-0.5 rounded-full">{count} Video</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-20 text-slate-500 bg-[#121214] rounded-2xl border border-white/5">
+                        <p>Tidak ada kategori untuk provider ini.</p>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2 mb-4">
+                      <button onClick={() => setSelectedCategory(null)} className="p-1 bg-[#1A1A1D] rounded-full border border-white/10 text-slate-400 hover:text-white transition-colors">
+                        <ChevronLeft className="w-5 h-5" />
+                      </button>
+                      <h2 className="text-xl font-bold text-white capitalize">{selectedCategory}</h2>
+                      <span className="ml-auto text-xs font-bold text-amber-500 bg-amber-500/10 px-2 py-1 rounded">{categoryDramas.length} Video</span>
+                    </div>
+                    
+                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
+                      {categoryDramas.map((item, idx) => (
+                        <div
+                          key={`cat-drama-${item.id || item.videoFakeId || idx}-${idx}`}
+                          onClick={() => handleSelectDrama(item)}
+                          className="group relative rounded-xl overflow-hidden cursor-pointer bg-[#161618] border border-white/5 hover:border-amber-500/50 transition-all shadow-md aspect-[2/3]"
+                        >
+                          <img src={getImage(item)} alt={getTitle(item)} className="absolute inset-0 w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" loading="lazy" />
+                          <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 bg-black/40">
+                            <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-amber-500 text-black flex items-center justify-center shadow-lg">
+                              <Play className="w-4 h-4 ml-1" />
+                            </div>
+                          </div>
+                          <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/90 to-transparent p-2 md:p-3 pt-6">
+                            <h4 className="font-bold text-white text-[10px] md:text-[11px] leading-tight line-clamp-2">{getTitle(item)}</h4>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </motion.div>
+            )}
+
             {view === 'history' && (
               <motion.div 
                 key="history"
@@ -779,6 +960,86 @@ export default function App() {
                 </div>
               </motion.div>
             )}
+            {view === 'profile' && (
+              <motion.div
+                key="profile"
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="w-full max-w-xl mx-auto pb-20 px-4 pt-4"
+              >
+                <div className="bg-[#161618] border border-white/5 p-6 rounded-2xl mb-6 flex flex-col items-center">
+                  <div className="w-24 h-24 rounded-2xl overflow-hidden mb-4 border-2 border-amber-500 p-1">
+                    <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" alt="Profile" className="w-full h-full object-cover rounded-xl bg-[#1A1A1D]" />
+                  </div>
+                  <h3 className="text-xl font-bold text-white mb-1">
+                    <span className="text-amber-500">{limitData?.user?.limit > 100 ? 'PRO' : 'FREE'}</span> User
+                  </h3>
+                  <div className="flex gap-2 text-xs font-bold mt-2">
+                    <span className="bg-emerald-500/10 text-emerald-500 px-3 py-1 rounded-full border border-emerald-500/20">Aktif</span>
+                  </div>
+                </div>
+
+                <div className="bg-[#161618] border border-white/5 rounded-2xl divide-y divide-white/5 mb-6">
+                   <div className="flex justify-between items-center p-4">
+                     <div className="flex items-center gap-3 text-slate-400">
+                       <Key className="w-5 h-5" />
+                       <span className="font-bold text-sm">Status Akun</span>
+                     </div>
+                     <span className="text-white font-bold text-sm uppercase">{limitData?.user?.limit > 100 ? 'PRO' : 'FREE'}</span>
+                   </div>
+                   <div className="flex justify-between items-center p-4">
+                     <div className="flex items-center gap-3 text-slate-400">
+                       <Crown className="w-5 h-5 text-amber-500" />
+                       <span className="font-bold text-sm">Limit</span>
+                     </div>
+                     <span className="text-amber-500 font-bold text-sm">
+                       {limitData ? (
+                         limitData.user?.limit > 1000 
+                          ? 'Unlimited' 
+                          : `${Math.max(0, limitData.user?.limit - limitData.user?.dataLimit)} Sisa`
+                       ) : 'Loading...'}
+                     </span>
+                   </div>
+                   <div className="flex justify-between items-center p-4">
+                     <div className="flex items-center gap-3 text-slate-400">
+                       <Globe className="w-5 h-5 text-blue-400" />
+                       <span className="font-bold text-sm">IP Address</span>
+                     </div>
+                     <span className="text-white font-mono text-xs opacity-70 break-all text-right">{profileData.ip}</span>
+                   </div>
+                   <div className="flex justify-between items-center p-4">
+                     <div className="flex items-center gap-3 text-slate-400 shrink-0">
+                       <Smartphone className="w-5 h-5 text-pink-400" />
+                       <span className="font-bold text-sm">User Agent</span>
+                     </div>
+                     <span className="text-white font-mono text-xs opacity-70 flex-1 text-right ml-4 line-clamp-2 max-w-[200px] break-all">{profileData.userAgent}</span>
+                   </div>
+                </div>
+
+                {/* QR Code Placeholder */}
+                <div className="bg-[#161618] border border-white/5 rounded-2xl p-6 mb-6 flex flex-col items-center justify-center">
+                  <h4 className="text-white font-bold mb-4 flex items-center gap-2"><QrCode className="w-5 h-5 text-amber-500"/> QR Akses Khusus</h4>
+                  <div className="w-48 h-48 bg-white p-2 rounded-xl flex items-center justify-center">
+                    <img src={limitData?.qrImage || "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=example_qr"} alt="QR" className="w-full h-full object-contain" />
+                  </div>
+                  <p className="text-xs text-slate-500 text-center mt-4 text-amber-500/80">Silakan scan kode QR ini untuk info lebih lanjut atau upgrade akun.</p>
+                </div>
+
+                {/* Contacts */}
+                <div className="grid grid-cols-2 gap-3 mb-6">
+                   <a href="https://wa.me/6287733745059" target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 bg-[#1A3324] text-[#25D366] hover:bg-[#1f422d] py-3 rounded-xl border border-[#25D366] transition-colors">
+                     <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413z"/></svg>
+                     <span className="font-bold text-xs">WhatsApp</span>
+                   </a>
+                   <a href="https://t.me/otomotif_digital" target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 bg-[#122A3B] text-[#0088cc] hover:bg-[#18354c] py-3 rounded-xl border border-[#0088cc] transition-colors">
+                     <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M12 24c6.627 0 12-5.373 12-12S18.627 0 12 0 0 5.373 0 12s5.373 12 12 12zM5.334 11.332l12.441-4.787c.579-.228 1.102.137.915.932l-2.097 9.873c-.156.711-.581.887-1.173.553l-3.245-2.392-1.564 1.505c-.173.173-.318.318-.654.318l.233-3.298 6-5.419c.261-.233-.058-.362-.406-.131l-7.416 4.665-3.197-1.001c-.694-.216-.71-.694.146-1.03z"/></svg>
+                     <span className="font-bold text-xs">Telegram</span>
+                   </a>
+                </div>
+
+              </motion.div>
+            )}
           </AnimatePresence>
         </div>
 
@@ -788,7 +1049,7 @@ export default function App() {
              <Tv className="w-5 h-5" />
              <span className="text-[10px] font-bold">Beranda</span>
           </button>
-          <button onClick={() => { setView('home'); window.scrollTo({ top: 300, behavior: 'smooth' }); }} className="flex flex-col items-center gap-1 text-slate-500 hover:text-amber-500">
+          <button onClick={() => { setView('categories'); setSelectedCategory(null); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className={`flex flex-col items-center gap-1 hover:text-amber-500 ${view === 'categories' ? 'text-amber-500' : 'text-slate-500'}`}>
              <LayoutGrid className="w-5 h-5" />
              <span className="text-[10px] font-bold">Kategori</span>
           </button>
@@ -800,13 +1061,63 @@ export default function App() {
              <Crown className="w-5 h-5" />
              <span className="text-[10px] font-bold">Riwayat</span>
           </button>
-          <button onClick={() => alert('Fitur Profil belum tersedia')} className="flex flex-col items-center gap-1 text-slate-500 hover:text-amber-500">
-             <div className="w-5 h-5 rounded-full overflow-hidden">
+          <button onClick={() => setView('profile')} className={`flex flex-col items-center gap-1 hover:text-amber-500 ${view === 'profile' ? 'text-amber-500' : 'text-slate-500'}`}>
+             <div className={`w-5 h-5 rounded-md overflow-hidden ${view === 'profile' ? 'ring-2 ring-amber-500 ring-offset-1 ring-offset-[#0A0A0B]' : ''}`}>
                 <img src="https://api.dicebear.com/7.x/avataaars/svg?seed=Felix" alt="Profile" className="w-full h-full object-cover" />
              </div>
              <span className="text-[10px] font-bold">Profil</span>
           </button>
         </div>
+        
+        {/* Limit Exceeded Popup */}
+        <AnimatePresence>
+          {showLimitPopup && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.95, opacity: 0 }}
+                className="bg-[#161618] border border-amber-500/30 rounded-2xl p-6 max-w-sm w-full relative"
+              >
+                <button onClick={() => setShowLimitPopup(false)} className="absolute top-4 right-4 text-slate-400 hover:text-white bg-white/5 rounded-full p-2">
+                  <X className="w-5 h-5" />
+                </button>
+                <div className="flex flex-col items-center text-center">
+                  <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mb-4 border border-red-500/20">
+                    <Crown className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-xl font-bold text-white mb-2">Limit Habis</h3>
+                  <p className="text-amber-500/90 text-sm leading-relaxed mb-6">
+                    {limitData?.popupText || "Mohon maaf limit menonton Anda sudah habis, harap upgrade ke VIP untuk menikmati semua tayangan tanpa batas."}
+                  </p>
+                  
+                  {limitData?.qrImage && (
+                    <div className="bg-white p-2 rounded-xl mb-6">
+                      <img src={limitData.qrImage} alt="QR Code" className="w-40 h-40 object-contain mx-auto" />
+                    </div>
+                  )}
+
+                  <div className="w-full space-y-3">
+                     <a href="https://wa.me/6287733745059" target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 bg-[#25D366] text-white font-bold py-3 px-4 rounded-xl hover:bg-[#20bd5a] transition-all border-none">
+                       <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.01c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413z"/></svg>
+                       <span className="font-bold">Hubungi WhatsApp</span>
+                     </a>
+                     <a href="https://t.me/otomotif_digital" target="_blank" rel="noopener noreferrer" className="flex items-center justify-center gap-2 bg-[#0088cc] text-white font-bold py-3 px-4 rounded-xl hover:bg-[#007ab8] transition-all border-none">
+                       <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M12 24c6.627 0 12-5.373 12-12S18.627 0 12 0 0 5.373 0 12s5.373 12 12 12zM5.334 11.332l12.441-4.787c.579-.228 1.102.137.915.932l-2.097 9.873c-.156.711-.581.887-1.173.553l-3.245-2.392-1.564 1.505c-.173.173-.318.318-.654.318l.233-3.298 6-5.419c.261-.233-.058-.362-.406-.131l-7.416 4.665-3.197-1.001c-.694-.216-.71-.694.146-1.03z"/></svg>
+                       <span className="font-bold">Hubungi Telegram</span>
+                     </a>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
       </main>
     </div>
   );

@@ -28,6 +28,7 @@
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "react-player": "^3.4.0",
+    "react-router-dom": "^7.15.0",
     "vite": "^6.2.3",
     "wrangler": "^4.90.1"
   },

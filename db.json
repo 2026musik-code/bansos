@@ -1,0 +1,23 @@
+{
+  "adminPassword": "admin",
+  "popupText": "Mohon maaf limit menonton Anda sudah habis, harap upgrade ke VIP untuk menikmati semua tayangan tanpa batas. Hubungi customer service kami.",
+  "qrImage": "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=example_qr",
+  "users": [
+    {
+      "id": "1",
+      "ip": "192.168.1.1",
+      "userAgent": "Mozilla/5.0",
+      "limit": 10,
+      "dataLimit": 5,
+      "lastActive": "2026-05-14T02:00:00Z"
+    },
+    {
+      "id": "1778727207990",
+      "ip": "2402:8780:1020:c2f0:d821:284e:cfad:de1, 169.254.169.126",
+      "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36",
+      "limit": 10,
+      "dataLimit": 1,
+      "lastActive": "2026-05-14T03:00:45.586Z"
+    }
+  ]
+}
