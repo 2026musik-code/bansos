@@ -356,9 +356,22 @@ app.get('/api/cors-proxy', async (c) => {
 
 app.get('*', async (c) => {
   if (c.env.ASSETS) {
+    // Gunakan URL yang dimodifikasi host-nya ke localhost agar env.ASSETS (Cloudflare Workers) 
+    // tidak bingung saat request datang dari Custom Domain.
+    const url = new URL(c.req.url);
+    url.hostname = 'localhost';
+    url.protocol = 'http:';
+
+    const reqOptions = {
+        method: c.req.method,
+        headers: new Headers(c.req.raw.headers)
+    };
+    reqOptions.headers.delete('host');
+
     try {
       // Coba fetch asset sesuai path asli (CSS, JS, gambar, dll)
-      const res = await c.env.ASSETS.fetch(c.req.raw);
+      const reqAssets = new Request(url.toString(), reqOptions);
+      const res = await c.env.ASSETS.fetch(reqAssets);
       if (res && res.status < 400) {
         return res;
       }
@@ -367,9 +380,8 @@ app.get('*', async (c) => {
     }
     
     // Jika tidak ditemukan (SPA mode), fallback ke index.html
-    const url = new URL(c.req.url);
     url.pathname = '/';
-    return await c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
+    return await c.env.ASSETS.fetch(new Request(url.toString(), reqOptions));
   }
   return c.notFound();
 });
