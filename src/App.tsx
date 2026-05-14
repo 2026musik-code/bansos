@@ -253,22 +253,50 @@ export default function App() {
     return item.title || item.chapter_name || item.name || item.judul || (item.episode ? `Episode ${item.episode}` : undefined) || 'Unknown Title';
   };
 
+  // Helper for episode title specifically
+  const getEpisodeTitle = (ep: any, idx: number, parentDrama: any) => {
+    if (ep.episodeNumber) return `Episode ${ep.episodeNumber}`;
+    if (ep.episode) return `Episode ${ep.episode}`;
+    
+    const epTitle = getTitle(ep);
+    const parentTitle = getTitle(parentDrama);
+    
+    if (!epTitle || epTitle === 'Unknown Title') return `Eps ${idx + 1}`;
+    
+    // If the episode title is exactly the same as the parent drama title, just return the episode number
+    if (parentTitle && epTitle.toLowerCase() === parentTitle.toLowerCase()) {
+      return `Eps ${idx + 1}`;
+    }
+    
+    return epTitle;
+  };
+
   // Helper to extract iframe or video URL
   const getStreamUrl = (data: any) => {
     if (!data) return null;
-    if (typeof data === 'string') return data;
-    if (data.data?.streams && Array.isArray(data.data.streams) && data.data.streams[0]?.url) return data.data.streams[0].url;
-    if (data.streams && Array.isArray(data.streams) && data.streams[0]?.url) return data.streams[0].url;
-    if (data.data?.url) return data.data.url;
-    if (data.data?.link) return data.data.link;
-    if (data.data?.iframe) return data.data.iframe;
-    if (data.url) return data.url;
-    if (data.link) return data.link;
-    if (data.file) return data.file;
-    if (data.iframe) return data.iframe;
-    if (Array.isArray(data) && data[0]?.url) return data[0].url;
-    if (Array.isArray(data.data) && data.data[0]?.url) return data.data[0].url;
     
+    let url = null;
+    if (typeof data === 'string') url = data;
+    else if (data.data?.streams && Array.isArray(data.data.streams) && data.data.streams[0]?.url) url = data.data.streams[0].url;
+    else if (data.streams && Array.isArray(data.streams) && data.streams[0]?.url) url = data.streams[0].url;
+    else if (data.data?.url) url = data.data.url;
+    else if (data.data?.link) url = data.data.link;
+    else if (data.data?.iframe) url = data.data.iframe;
+    else if (data.url) url = data.url;
+    else if (data.link) url = data.link;
+    else if (data.file) url = data.file;
+    else if (data.iframe) url = data.iframe;
+    else if (Array.isArray(data) && data[0]?.url) url = data[0].url;
+    else if (Array.isArray(data.data) && data.data[0]?.url) url = data.data[0].url;
+    
+    if (url) {
+        // If it's an m3u8, proxy it to bypass CORS restrictions
+        if (url.includes('.m3u8')) {
+           return `/api/cors-proxy?url=${encodeURIComponent(url)}`;
+        }
+        return url;
+    }
+
     // Fallback: Recursively look for a string starting with http and ending with m3u8/mp4, or just any http
     const _recursiveFindStr = (obj: any): string | null => {
       if (!obj || typeof obj !== 'object') return null;
@@ -595,8 +623,7 @@ export default function App() {
                     <div className="w-full overflow-x-auto no-scrollbar pb-2">
                       <div className="grid grid-rows-5 grid-flow-col gap-2 w-max">
                         {episodes.map((ep, idx) => {
-                          const epTitle = getTitle(ep) || `Eps ${idx + 1}`;
-                          const displayTitle = /^[\d]+$/.test(epTitle.toString().trim()) ? `Episode ${epTitle}` : epTitle;
+                          const displayTitle = getEpisodeTitle(ep, idx, selectedDrama);
                           
                           return (
                             <button
@@ -612,7 +639,10 @@ export default function App() {
                     </div>
                   ) : (
                     <div className="text-center py-10 bg-[#1A1A1D] rounded-xl border border-white/5">
-                      <p className="text-slate-500 italic text-sm">Belum ada episode.</p>
+                      <p className="text-slate-500 italic text-sm">Episode tidak tersedia dari provider.</p>
+                      {selectedProvider === 'netshort' && (
+                        <p className="text-xs text-red-500/70 mt-2">API Netshort saat ini sedang tidak mengembalikan daftar episode.</p>
+                      )}
                     </div>
                   )}
                 </div>

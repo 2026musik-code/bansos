@@ -78,6 +78,55 @@ async function startServer() {
     }
   });
 
+  // CORS Proxy for HLS streams (m3u8 playlists and ts chunks)
+  app.get("/api/cors-proxy", async (req, res) => {
+    try {
+      const targetUrl = req.query.url as string;
+      if (!targetUrl) return res.status(400).send("URL is required");
+
+      const response = await fetch(targetUrl);
+      
+      const contentType = response.headers.get("content-type");
+      if (contentType) {
+        res.setHeader("Content-Type", contentType);
+      }
+      res.setHeader("Access-Control-Allow-Origin", "*");
+
+      if (targetUrl.includes(".m3u8")) {
+        const text = await response.text();
+        const baseUrl = new URL(".", targetUrl).href;
+        
+        // Rewrite all chunk URLs to go through the proxy
+        const lines = text.split('\n').map(line => {
+          if (line.trim() && !line.startsWith("#")) {
+            // It's a segment URL
+            const segmentUrl = line.startsWith("http") ? line : new URL(line.trim(), baseUrl).href;
+            return `/api/cors-proxy?url=${encodeURIComponent(segmentUrl)}`;
+          }
+          // Also rewrite URI attributes in tags
+          if (line.includes('URI="')) {
+            return line.replace(/URI="([^"]+)"/g, (match, p1) => {
+              if (p1.startsWith("data:")) return match;
+              const uri = p1.startsWith("http") ? p1 : new URL(p1, baseUrl).href;
+              return `URI="/api/cors-proxy?url=${encodeURIComponent(uri)}"`;
+            });
+          }
+          return line;
+        });
+        
+        res.send(lines.join('\n'));
+      } else {
+        // Stream other files like .ts directly
+        if (!response.body) return res.status(500).send("No body");
+        const arrayBuffer = await response.arrayBuffer();
+        res.send(Buffer.from(arrayBuffer));
+      }
+    } catch (error) {
+      console.error("Proxy error:", error);
+      res.status(500).json({ error: "Failed to proxy request" });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
