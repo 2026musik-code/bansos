@@ -114,7 +114,14 @@ export default function App() {
     const fetchProviders = async () => {
       try {
         const res = await fetch('/api/providers');
-        const data = await res.json();
+        const text = await res.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          console.error('Providers fetch error raw text:', text);
+          throw e;
+        }
         
         let providerList: any[] = [];
         if (Array.isArray(data)) {
@@ -153,7 +160,14 @@ export default function App() {
       setIsLoadingTrending(true);
       try {
         const res = await fetch(`/api/rank/${selectedProvider}`);
-        const data = await res.json();
+        const text = await res.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (e) {
+          console.error("Trending fetch error raw text:", text);
+          throw e;
+        }
         if (Array.isArray(data)) setTrendingDramas(data);
         else if (data && Array.isArray(data.data)) setTrendingDramas(data.data);
         else if (data && Array.isArray(data.result)) setTrendingDramas(data.result);

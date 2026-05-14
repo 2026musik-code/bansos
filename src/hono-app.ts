@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
+import { getCookie, setCookie } from 'hono/cookie';
 
 export type Bindings = {
   patungan: any; // Cloudflare KV 
@@ -9,8 +10,94 @@ export type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-// Enable CORS for all API routes
-app.use('/api/*', cors());
+app.onError((err, c) => {
+  console.error(err);
+  return c.json({ error: err.message }, 500);
+});
+
+// In-memory store untuk IP Lock (Hemat KV API limit, persisten selama worker isolate hidup)
+const ipLocks = new Map<string, { uid: string, ua: string, time: number }>();
+
+// Middleware Anti-Scraper (Melindungi API Key dan Endpoint)
+app.use('/api/*', async (c, next) => {
+  const origin = c.req.header('Origin');
+  const referer = c.req.header('Referer');
+  const host = c.req.header('Host');
+  const path = new URL(c.req.url).pathname;
+
+  console.log(`[Anti-Scraper] Path: ${path} | Origin: ${origin} | Referer: ${referer} | Host: ${host}`);
+
+  // Cek validitas Origin
+  if (origin) {
+    try {
+      const originHost = new URL(origin).host;
+      if (originHost !== host && !originHost.includes('localhost') && !originHost.includes('run.app')) {
+        return c.json({ error: "Access Denied: Invalid Origin" }, 403);
+      }
+    } catch (e) {}
+  } 
+  // Cek Referer jika Origin tidak ada (melindungi dari direct curl/postman)
+  else if (!referer) {
+    // Pada environment dev (misal AI Studio mode iframe), referer bisa saja tidak dikirim.
+    // Kita skip strict check referer ini jika requestnya ada user-agent dari browser umum.
+    const ua = c.req.header('user-agent') || '';
+    if (!path.startsWith('/api/cors-proxy') && !path.startsWith('/api/admin') && !ua.includes('Mozilla')) {
+      return c.json({ error: "Access Denied: No Referer" }, 403);
+    }
+  } else if (referer) {
+    try {
+      const refererHost = new URL(referer).host;
+      if (refererHost !== host && !refererHost.includes('localhost') && !refererHost.includes('run.app')) {
+        return c.json({ error: "Access Denied: Invalid Referer" }, 403);
+      }
+    } catch (e) {}
+  }
+
+  // ---- MEKANISME IP+COOKIE+USERAGENT LOCK ----
+  // Abaikan admin route dari lock
+  if (!path.startsWith('/api/admin')) {
+    const ip = c.req.header('x-forwarded-for') || c.req.header('cf-connecting-ip') || 'unknown-ip';
+    const ua = c.req.header('user-agent') || 'unknown-ua';
+    // Disederhanakan untuk menghindari error di dalam iFrame (di mana cookies sering di-block oleh browser)
+    // Kita gunakan simple logging activity saja atau rate limiting ringan tanpa blokir keras
+    if (!ipLocks.has(ip)) {
+      ipLocks.set(ip, { uid: '', ua, time: Date.now() });
+    } else {
+      const lock = ipLocks.get(ip)!;
+      // Jangan langsung blokir jika UID berbeda karena iframes tidak selalu mengirim cookie
+      // Tapi kita cek jika UA berubah drastis pada IP yang sama dalam waktu singkat
+      if (lock.ua !== ua && (Date.now() - lock.time < 10000)) {
+         console.warn(`[ANTI-SCRAPER] Suspicious User-Agent rotation on IP: ${ip}`);
+         // Bisa aktifkan return 403 jika dirasa aman, saat ini hanya warning
+      }
+      lock.time = Date.now();
+      ipLocks.set(ip, lock);
+    }
+    
+    // Cleanup memory: Hapus lock yang lebih dari 24 jam tidak aktif untuk mencegah memory leak worker
+    if (Math.random() < 0.01) { // 1% chance setiap request akan trigger cleanup
+      const now = Date.now();
+      for (const [key, val] of ipLocks.entries()) {
+        if (now - val.time > 86400000) {
+          ipLocks.delete(key);
+        }
+      }
+    }
+  }
+
+  await next();
+});
+
+// Enable CORS secara dinamis (Hanya mengizinkan origin yang sesuai)
+app.use('/api/*', (c, next) => {
+  const origin = c.req.header('Origin');
+  return cors({
+    origin: origin || '*',
+    allowHeaders: ['Content-Type', 'Authorization', 'x-admin-password', 'x-forwarded-for', 'user-agent'],
+    allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true,
+  })(c, next);
+});
 
 // --- HELPER UNTUK KV & R2 ---
 
@@ -159,11 +246,39 @@ app.post('/api/track', async (c) => {
 // --- CUTAD API PROXIES ---
 const BASE_CUTAD = "https://www.cutad.web.id/api/public";
 
+const fetchCutadAPI = async (url: string, c: any) => {
+  try {
+    // Gunakan User-Agent standard dan bypass CORS untuk API eksternal
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+        'Referer': 'https://www.cutad.web.id/'
+      }
+    });
+    
+    if (!response.ok) {
+      console.error(`Cutad API failed with status ${response.status} for ${url}`);
+      return c.json({ error: `Cutad API returned ${response.status}`, data: [] }, response.status);
+    }
+    
+    const text = await response.text();
+    try {
+      return c.json(JSON.parse(text));
+    } catch (e) {
+      console.error(`Failed to parse Cutad JSON for ${url}. Raw text snippet: ${text.slice(0, 200)}`);
+      return c.json({ error: "Invalid JSON response from upstream", data: [] }, 500);
+    }
+  } catch (error: any) {
+    console.error(`Fetch error to Cutad API:`, error);
+    return c.json({ error: error.message, data: [] }, 500);
+  }
+};
+
 app.get('/api/providers', async (c) => {
   const apiKey = await getApiKey(c.env);
   const url = `${BASE_CUTAD}?action=providers&key=${apiKey}`;
-  const response = await fetch(url);
-  return c.json(await response.json());
+  return fetchCutadAPI(url, c);
 });
 
 app.get('/api/search/:provider', async (c) => {
@@ -171,16 +286,14 @@ app.get('/api/search/:provider', async (c) => {
   const q = c.req.query('q') || '';
   const apiKey = await getApiKey(c.env);
   const url = `${BASE_CUTAD}/${provider}?action=search&q=${encodeURIComponent(q)}&key=${apiKey}`;
-  const response = await fetch(url);
-  return c.json(await response.json());
+  return fetchCutadAPI(url, c);
 });
 
 app.get('/api/rank/:provider', async (c) => {
   const provider = c.req.param('provider');
   const apiKey = await getApiKey(c.env);
   const url = `${BASE_CUTAD}/${provider}?action=rank&key=${apiKey}`;
-  const response = await fetch(url);
-  return c.json(await response.json());
+  return fetchCutadAPI(url, c);
 });
 
 app.get('/api/episodes/:provider', async (c) => {
@@ -188,8 +301,7 @@ app.get('/api/episodes/:provider', async (c) => {
   const id = c.req.query('id') || '';
   const apiKey = await getApiKey(c.env);
   const url = `${BASE_CUTAD}/${provider}?action=episodes&id=${encodeURIComponent(id)}&key=${apiKey}`;
-  const response = await fetch(url);
-  return c.json(await response.json());
+  return fetchCutadAPI(url, c);
 });
 
 app.get('/api/stream/:provider', async (c) => {
@@ -197,8 +309,7 @@ app.get('/api/stream/:provider', async (c) => {
   const id = c.req.query('id') || '';
   const apiKey = await getApiKey(c.env);
   const url = `${BASE_CUTAD}/${provider}?action=stream&id=${encodeURIComponent(id)}&key=${apiKey}`;
-  const response = await fetch(url);
-  return c.json(await response.json());
+  return fetchCutadAPI(url, c);
 });
 
 // CORS Proxy untuk Stream (m3u8, ts)

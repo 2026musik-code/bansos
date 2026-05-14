@@ -68,6 +68,7 @@ async function startServer() {
   app.all('/api/*', async (req, res) => {
     try {
        const url = `http://${req.headers.host}${req.url}`;
+       console.log(`[Express] Routing ${req.method} ${req.url} -> Hono`);
        const init: RequestInit = {
          method: req.method,
          headers: req.headers as HeadersInit,
@@ -84,6 +85,15 @@ async function startServer() {
        // Panggil Hono Worker dengan mock env
        const response = await honoApp.fetch(webReq, env);
        
+       // Explicitly prevent HTML responses
+       const contentType = response.headers.get('content-type') || 'application/json';
+       if (contentType.includes('text/html')) {
+          console.warn(`[Express] Intercepted HTML response from Hono for ${req.url}. Overriding to JSON.`);
+          res.setHeader('Content-Type', 'application/json');
+          res.status(500).json({ error: "Upstream returned HTML", data: [] });
+          return;
+       }
+       
        // Pass Headers & Status via Express
        response.headers.forEach((value, key) => res.setHeader(key, value));
        res.status(response.status);
@@ -92,8 +102,9 @@ async function startServer() {
        res.send(Buffer.from(arrayBuffer));
        
     } catch (e) {
-       console.error(e);
-       res.status(500).send("Hono Adapter Error");
+       console.error('[Express] Hono Adapter Error:', e);
+       res.setHeader('Content-Type', 'application/json');
+       res.status(500).json({ error: "Hono Adapter Error", details: String(e) });
     }
   });
 
