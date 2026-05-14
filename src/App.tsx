@@ -67,6 +67,25 @@ export default function App() {
   const [profileData, setProfileData] = useState({ ip: 'Loading...', userAgent: 'Loading...' });
   const [limitData, setLimitData] = useState<{ exceeded: boolean, popupText: string, qrImage: string, user: any } | null>(null);
   const [showLimitPopup, setShowLimitPopup] = useState(false);
+  const [showPlayerUI, setShowPlayerUI] = useState(true);
+  const playerUiTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const resetPlayerUiTimer = () => {
+    setShowPlayerUI(true);
+    if (playerUiTimeoutRef.current) clearTimeout(playerUiTimeoutRef.current);
+    playerUiTimeoutRef.current = setTimeout(() => {
+      setShowPlayerUI(false);
+    }, 3000);
+  };
+
+  useEffect(() => {
+    if (view === 'player') {
+      resetPlayerUiTimer();
+    }
+    return () => {
+      if (playerUiTimeoutRef.current) clearTimeout(playerUiTimeoutRef.current);
+    };
+  }, [view, streamData]);
 
   // Ping tracking to get user info on mount/view profile
   useEffect(() => {
@@ -886,33 +905,34 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 className="w-full flex flex-col h-full bg-black z-50 absolute inset-0"
               >
-                <div className="flex items-center justify-between p-4 bg-gradient-to-b from-black/80 to-transparent absolute top-0 w-full z-10 pointer-events-none">
-                  <div className="flex flex-col flex-1 truncate mr-4">
-                    <span className="text-[10px] text-amber-500 font-bold uppercase tracking-widest drop-shadow-md">Now Playing</span>
-                    <h2 className="text-sm font-bold text-white truncate drop-shadow-md">
-                      {selectedDrama ? getTitle(selectedDrama) : 'Video Stream'} 
-                      {currentEpisode ? ` - ${getTitle(currentEpisode) || `Eps ${getCurrentEpisodeIndex() + 1}`}` : ''}
-                    </h2>
-                  </div>
-                  <div className="flex items-center gap-2 pointer-events-auto">
-                    {getCurrentEpisodeIndex() !== -1 && getCurrentEpisodeIndex() < episodes.length - 1 && (
-                      <button
-                        onClick={handleNextEpisode}
-                        className="flex items-center justify-center px-3 py-1.5 bg-amber-500 text-black text-xs font-bold rounded-lg hover:bg-amber-400 transition-colors shrink-0"
-                      >
-                        Berikutnya
-                      </button>
-                    )}
+                <div 
+                  className={`flex items-center justify-between p-3 absolute top-0 w-full z-10 transition-opacity duration-300 pointer-events-none pt-4 ${showPlayerUI ? 'opacity-100' : 'opacity-0'}`}
+                >
+                  <div className="pointer-events-auto">
                     <button 
                       onClick={() => setView('details')}
-                      className="flex items-center justify-center w-8 h-8 bg-black/50 backdrop-blur-md rounded-full text-white hover:bg-white/20 transition-colors shrink-0"
+                      className="flex items-center justify-center w-8 h-8 bg-black/40 backdrop-blur-md rounded-full text-white hover:bg-white/20 transition-colors shrink-0"
                     >
                       <X className="w-5 h-5" />
                     </button>
                   </div>
+                  <div className="pointer-events-auto">
+                    {getCurrentEpisodeIndex() !== -1 && getCurrentEpisodeIndex() < episodes.length - 1 && (
+                      <button
+                        onClick={handleNextEpisode}
+                        className="flex items-center justify-center px-4 py-2 bg-amber-500 text-black text-[11px] font-bold rounded-full shadow-[0_0_15px_rgba(245,158,11,0.3)] hover:bg-amber-400 transition-colors shrink-0"
+                      >
+                        Berikutnya
+                      </button>
+                    )}
+                  </div>
                 </div>
                 
-                <div className="flex-1 w-full flex items-center justify-center relative">
+                <div 
+                  className="flex-1 w-full flex items-center justify-center relative" 
+                  onClick={resetPlayerUiTimer} 
+                  onTouchStart={resetPlayerUiTimer}
+                >
                   {isLoadingStream ? (
                     <div className="flex flex-col items-center gap-2 text-amber-500">
                       <Loader2 className="w-8 h-8 animate-spin" />
