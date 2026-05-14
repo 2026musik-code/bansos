@@ -347,9 +347,76 @@ app.get('*', async (c) => {
     
     // 2. Jika path tidak ditemukan (untuk SPA navigation), fallback ke index.html
     const url = new URL(c.req.url);
+    const originalPathname = url.pathname;
     url.pathname = '/';
     // Kita panggil ulang dengan Request baru pada '/'
-    return await c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
+    const indexRes = await c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
+
+    if (indexRes && indexRes.status === 200) {
+      const contentType = indexRes.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        let htmlText = await indexRes.text();
+
+        // 3. Dynamic Open Graph Tag Injection untuk halaman detail / stream
+        const detailMatch = originalPathname.match(/\/(?:detail|stream)\/([^\/]+)\/([^\/]+)/);
+        if (detailMatch) {
+          const provider = detailMatch[1];
+          const id = detailMatch[2];
+          try {
+            const apiKey = await getApiKey(c.env);
+            if (apiKey) {
+              const apiUrl = `https://www.cutad.web.id/api/public/${provider}?action=detail&id=${id}&key=${apiKey}`;
+              const apiRes = await fetch(apiUrl, {
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                  'Accept': 'application/json',
+                  'Referer': 'https://www.cutad.web.id/'
+                }
+              });
+              if (apiRes.ok) {
+                const json: any = await apiRes.json();
+                if (json.status && json.data) {
+                  const detail = json.data;
+                  // Beberapa provider nge-return data di dalam array [0], mari kita handle
+                  const item = Array.isArray(detail) ? detail[0] : detail;
+                  if (item) {
+                    const title = item.title || "XDrama - Nonton Film";
+                    const safeTitle = title.replace(/"/g, '&quot;');
+                    const desc = item.desc || item.description || "Nonton film dan short drama gratis di XDrama.";
+                    const safeDesc = desc.replace(/"/g, '&quot;');
+                    const image = item.poster || item.cover || "https://images.unsplash.com/photo-1536440136628-849c177e76a1?q=80&w=1200&auto=format&fit=crop";
+
+                    htmlText = htmlText.replace(/<title>.*?<\/title>/i, `<title>${safeTitle} - XDrama</title>`);
+                    htmlText = htmlText.replace(/<meta property="og:title" content="[^"]*"\s*\/?>/i, `<meta property="og:title" content="${safeTitle} - XDrama" />`);
+                    htmlText = htmlText.replace(/<meta property="og:description" content="[^"]*"\s*\/?>/i, `<meta property="og:description" content="${safeDesc}" />`);
+                    htmlText = htmlText.replace(/<meta property="og:image" content="[^"]*"\s*\/?>/i, `<meta property="og:image" content="${image}" />`);
+                    htmlText = htmlText.replace(/<meta name="description" content="[^"]*"\s*\/?>/i, `<meta name="description" content="${safeDesc}" />`);
+                    
+                    htmlText = htmlText.replace(/<meta property="twitter:title" content="[^"]*"\s*\/?>/i, `<meta property="twitter:title" content="${safeTitle} - XDrama" />`);
+                    htmlText = htmlText.replace(/<meta property="twitter:description" content="[^"]*"\s*\/?>/i, `<meta property="twitter:description" content="${safeDesc}" />`);
+                    htmlText = htmlText.replace(/<meta property="twitter:image" content="[^"]*"\s*\/?>/i, `<meta property="twitter:image" content="${image}" />`);
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            console.error("Failed to inject OG tags:", err);
+          }
+        }
+        
+        // Buat headers baru, hapus content-length karena ukuran text berubah
+        const newHeaders = new Headers(indexRes.headers);
+        newHeaders.delete('content-length');
+        
+        return new Response(htmlText, {
+          status: indexRes.status,
+          statusText: indexRes.statusText,
+          headers: newHeaders
+        });
+      }
+    }
+    
+    return indexRes;
   }
   return c.notFound();
 });
