@@ -9,7 +9,7 @@ binding = "ASSETS"
 
 [[kv_namespaces]]
 binding = "patungan"
-id = "518e56aeb4354c49b019cd4ab920f33f"
+id = "128e96cf8f334ca8a1b20897a65fefa8"
 
 [[r2_buckets]]
 binding = "vpsai"
