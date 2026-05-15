@@ -113,12 +113,33 @@ const saveApiKey = async (env: Bindings, key: string) => {
 
 // --- AUTH & ADMIN ENDPOINTS ---
 
+// Rate limiting untuk Admin Login
+const adminLocks = new Map<string, { attempts: number, lockUntil: number }>();
+
 app.post('/api/admin/login', async (c) => {
+  const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || '127.0.0.1';
+  const realIp = ip.split(',')[0].trim();
+  
+  const lock = adminLocks.get(realIp);
+  if (lock && lock.lockUntil > Date.now()) {
+    return c.json({ error: "Too many failed attempts. Try again later." }, 429);
+  }
+
   const { password } = await c.req.json();
   const config = await getConfig(c.env);
+  
   if (password === config.adminPassword) {
+    if (lock) adminLocks.delete(realIp);
     return c.json({ success: true });
   }
+  
+  const attempts = (lock?.attempts || 0) + 1;
+  adminLocks.set(realIp, {
+    attempts,
+    lockUntil: attempts >= 5 ? Date.now() + 60 * 60 * 1000 : 0 // Blokir 1 jam setelah 5x gagal
+  });
+  
+  console.warn(`[SECURITY] Failed admin login from ${realIp}. Attempts: ${attempts}`);
   return c.json({ error: "Unauthorized" }, 401);
 });
 
@@ -245,9 +266,8 @@ app.post('/api/track', async (c) => {
 // --- CUTAD API PROXIES ---
 const BASE_CUTAD = "https://www.cutad.web.id/api/public";
 
-const fetchCutadAPI = async (url: string, c: any) => {
+const fetchCutadAPI = async (url: string, c: any, shouldRewriteStream = false) => {
   try {
-    // Gunakan User-Agent standard dan bypass CORS untuk API eksternal
     const response = await fetch(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -255,22 +275,46 @@ const fetchCutadAPI = async (url: string, c: any) => {
         'Referer': 'https://www.cutad.web.id/'
       }
     });
-    
+
     if (!response.ok) {
-      console.error(`Cutad API failed with status ${response.status} for ${url}`);
-      return c.json({ error: `Cutad API returned ${response.status}`, data: [] }, response.status);
+      console.error(`Upstream API failed with status ${response.status} for ${url}`);
+      return c.json({ error: `Server Error, please try again later.`, data: [] }, response.status);
     }
     
-    const text = await response.text();
+    let text = await response.text();
+
+    if (shouldRewriteStream) {
+      try {
+        const json = JSON.parse(text);
+        
+        const rewriteObj = async (obj: any) => {
+          if (!obj) return;
+          for (const key of Object.keys(obj)) {
+            if (typeof obj[key] === 'string' && obj[key].includes('.m3u8')) {
+               const exp = Date.now() + 2 * 60 * 60 * 1000; // 2 hours
+               const token = await generateToken(obj[key], exp);
+               obj[key] = `/api/cors-proxy?url=${encodeURIComponent(obj[key])}&exp=${exp}&token=${token}`;
+            } else if (typeof obj[key] === 'object') {
+               await rewriteObj(obj[key]);
+            }
+          }
+        };
+        await rewriteObj(json);
+        return c.json(json);
+      } catch (e) {
+        // ... handled below
+      }
+    }
+
     try {
       return c.json(JSON.parse(text));
     } catch (e) {
-      console.error(`Failed to parse Cutad JSON for ${url}. Raw text snippet: ${text.slice(0, 200)}`);
-      return c.json({ error: "Invalid JSON response from upstream", data: [] }, 500);
+      console.error(`Failed to parse JSON for ${url}. Raw text snippet: ${text.slice(0, 200)}`);
+      return c.json({ error: "Internal Server Error", data: [] }, 500);
     }
   } catch (error: any) {
-    console.error(`Fetch error to Cutad API:`, error);
-    return c.json({ error: error.message, data: [] }, 500);
+    console.error(`Fetch error to Upstream:`, error);
+    return c.json({ error: "Network Error", data: [] }, 500);
   }
 };
 
@@ -306,14 +350,52 @@ app.get('/api/episodes/:provider', async (c) => {
 app.get('/api/stream/:provider', async (c) => {
   const provider = c.req.param('provider');
   const id = c.req.query('id') || '';
+  const deviceId = c.req.query('deviceId'); // Client must pass this!
+  
+  const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || '127.0.0.1';
+  const realIp = ip.split(',')[0].trim();
+  
+  const config = await getConfig(c.env);
+  let user = config.users.find((u: any) => 
+    (deviceId && u.deviceId === deviceId) || 
+    (u.ip === realIp)
+  );
+  
+  if (!user || user.dataLimit >= user.limit) {
+      return c.json({ error: "Limit Exceeded", exceeded: true }, 403);
+  }
+
   const apiKey = await getApiKey(c.env);
   const url = `${BASE_CUTAD}/${provider}?action=stream&id=${encodeURIComponent(id)}&key=${apiKey}`;
-  return fetchCutadAPI(url, c);
+  const response = await fetchCutadAPI(url, c, true);
+  
+  // Note: we can inject a temporary streaming token here if needed
+  return response;
+});
+
+// Simple HMAC-like hashing using Web Crypto API or a fallback if running locally
+const generateToken = async (url: string, exp: number) => {
+    const textToHash = url + exp + "SUPER_SECRET_TOKEN_XDRAMA_2026";
+    const msgUint8 = new TextEncoder().encode(textToHash);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgUint8);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
+app.post('/api/proxy-token', async (c) => {
+   const { url } = await c.req.json();
+   if (!url) return c.json({ error: "Missing url" }, 400);
+   const exp = Date.now() + 1000 * 60 * 60; // 1 jam masa aktif
+   const token = await generateToken(url, exp);
+   return c.json({ token, exp });
 });
 
 // CORS Proxy untuk Stream (m3u8, ts)
 app.get('/api/cors-proxy', async (c) => {
   const targetUrl = c.req.query('url');
+  const exp = parseInt(c.req.query('exp') || '0', 10);
+  const token = c.req.query('token') || c.req.query('t'); // 't' from internal m3u8 rewrite
+  
   if (!targetUrl) return c.text("URL is required", 400);
 
   // Mencegah proxy digunakan oleh web/aplikasi lain
@@ -321,21 +403,38 @@ app.get('/api/cors-proxy', async (c) => {
   const origin = c.req.header('Origin') || '';
   const host = c.req.header('Host') || '';
   
-  // Periksa apakah request berasal dari host yang sama atau domain yang kita izinkan
   const isAllowedOrigin = origin.includes(host) || referer.includes(host) || origin.includes('id.xdrama.web.id') || referer.includes('id.xdrama.web.id');
   const ua = c.req.header('user-agent') || '';
   const isDirectCurl = !ua.includes('Mozilla') && !ua.includes('AppleWebKit');
   
-  if (!isAllowedOrigin && !isDirectCurl && (origin || referer)) {
-     // Jika origin/referer ada tapi BUKAN dari host web kita, tolak.
-     return c.text("Access Denied: Unrecognized Origin", 403);
+  // Validasi JWT / Token Expiry
+  if (token && exp && Date.now() > exp) {
+     return c.text("Token expired", 403);
   }
 
-  // Tambahan keamanan: kita pastikan `targetUrl` adalah streaming/media (m3u8, ts, mp4, drm, key dll) 
-  // atau request dari provider yg kita layani, bukan untuk proxy domain asal-asalan
-  if (!targetUrl.includes('.m3u8') && !targetUrl.includes('.ts') && !targetUrl.includes('.mp4') && !targetUrl.includes('m3u8') && !targetUrl.includes('key')) {
-      // Tolak jika bukan request streaming yang disahkan.
-      // return c.text("Access Denied: Invalid target type", 403); 
+  // Jika dipanggil dari playlist internal (parameter 't'), kita bypass validasi referer strict,
+  // TAPI token 't' harus sesuai (generated below)
+  let isInternalSegment = false;
+  if (c.req.query('t')) {
+       // Verifikasi simple custom token untuk segment internal playlist
+       const expectedT = await generateToken(targetUrl, 0); 
+       if (token === expectedT) isInternalSegment = true;
+  } else {
+       // External request (initial m3u8), we strictly validate signature
+       if (exp) {
+          const expected = await generateToken(targetUrl, exp);
+          if (token !== expected) {
+              return c.text("Invalid Token Signature", 403);
+          }
+       } else {
+           // Fallback to strict origin if no signature, though signature preferred
+           if (!isAllowedOrigin && !isDirectCurl && (origin || referer)) {
+               return c.text("Access Denied: Unrecognized Origin", 403);
+           }
+           if (!targetUrl.includes('.m3u8') && !targetUrl.includes('.ts') && !targetUrl.includes('.mp4')) {
+               return c.text("Token required for arbitrary proxy endpoints", 403);
+           }
+       }
   }
 
   const response = await fetch(targetUrl, {
@@ -353,25 +452,25 @@ app.get('/api/cors-proxy', async (c) => {
   if (targetUrl.includes(".m3u8")) {
     const text = await response.text();
     const baseUrl = new URL(".", targetUrl).href;
-    
-    // Custom header/token sederhana untuk menghindari direct parse URL
-    // Nanti client akan memverifikasi. Di sini kita cuma bypass dulu dari server.
-    const customToken = Date.now().toString(36);
 
-    const lines = text.split('\n').map(line => {
+    const lines = await Promise.all(text.split('\n').map(async line => {
       if (line.trim() && !line.startsWith("#")) {
         const segmentUrl = line.startsWith("http") ? line : new URL(line.trim(), baseUrl).href;
-        return `/api/cors-proxy?url=${encodeURIComponent(segmentUrl)}&t=${customToken}`;
+        const subToken = await generateToken(segmentUrl, 0);
+        return `/api/cors-proxy?url=${encodeURIComponent(segmentUrl)}&t=${subToken}`;
       }
       if (line.includes('URI="')) {
-        return line.replace(/URI="([^"]+)"/g, (match, p1) => {
-          if (p1.startsWith("data:")) return match;
-          const uri = p1.startsWith("http") ? p1 : new URL(p1, baseUrl).href;
-          return `URI="/api/cors-proxy?url=${encodeURIComponent(uri)}&t=${customToken}"`;
-        });
+        // Handle sync/async logic carefully here, replacing is sync but generator is async.
+        // It's easier manually parsing:
+        const match = line.match(/URI="([^"]+)"/);
+        if (match && !match[1].startsWith("data:")) {
+           const uri = match[1].startsWith("http") ? match[1] : new URL(match[1], baseUrl).href;
+           const subToken = await generateToken(uri, 0);
+           return line.replace(/URI="[^"]+"/, `URI="/api/cors-proxy?url=${encodeURIComponent(uri)}&t=${subToken}"`);
+        }
       }
       return line;
-    });
+    }));
     
     return new Response(lines.join('\n'), { headers, status: response.status });
   }

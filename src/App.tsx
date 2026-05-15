@@ -296,7 +296,14 @@ export default function App() {
     const epId = episode.videoFakeId || episode.id || episode.link || episode.url || episode.chapter_id;
     
     try {
-      const res = await fetch(`/api/stream/${selectedProvider}?id=${encodeURIComponent(epId)}`);
+      const deviceId = localStorage.getItem('deviceId') || '';
+      const res = await fetch(`/api/stream/${selectedProvider}?id=${encodeURIComponent(epId)}&deviceId=${encodeURIComponent(deviceId)}`);
+      if (!res.ok && res.status === 403) {
+           setLimitData((prev: any) => ({ ...prev, exceeded: true }));
+           setTimeout(() => setIsLimit(true), 100);
+           setStreamData(null);
+           return;
+      }
       const data = await res.json();
       setStreamData(data);
     } catch (err) {
@@ -422,10 +429,6 @@ export default function App() {
     else if (Array.isArray(data.data) && data.data[0]?.url) url = data.data[0].url;
     
     if (url) {
-        // If it's an m3u8, proxy it to bypass CORS restrictions
-        if (url.includes('.m3u8')) {
-           return `/api/cors-proxy?url=${encodeURIComponent(url)}`;
-        }
         return url;
     }
 
