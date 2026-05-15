@@ -144,12 +144,33 @@ app.post('/api/admin/login', async (c) => {
 });
 
 // Middleware Admin
+const adminRateLocks = new Map<string, { attempts: number, lockUntil: number }>();
+
 const adminAuth = async (c: any, next: any) => {
+  const ip = c.req.header('cf-connecting-ip') || c.req.header('x-forwarded-for') || '127.0.0.1';
+  const realIp = ip.split(',')[0].trim();
+
+  // Memeriksa rate limit
+  const lock = adminRateLocks.get(realIp);
+  if (lock && lock.lockUntil > Date.now()) {
+    return c.json({ error: "Too many requests. Try again later." }, 429);
+  }
+
   const password = c.req.header('x-admin-password');
   const config = await getConfig(c.env);
+  
   if (password === config.adminPassword) {
+    // Reset rate limit jika berhasil
+    if (lock) adminRateLocks.delete(realIp);
     await next();
   } else {
+    // Menambah hitungan kegagalan
+    const attempts = (lock?.attempts || 0) + 1;
+    adminRateLocks.set(realIp, {
+      attempts,
+      lockUntil: attempts >= 10 ? Date.now() + 60 * 60 * 1000 : 0 // Blokir 1 jam setelah 10x gagal akses endpoint admin dengan password salah
+    });
+    console.warn(`[SECURITY] Failed admin endpoint access from ${realIp}. Attempts: ${attempts}`);
     return c.json({ error: "Unauthorized" }, 401);
   }
 };
