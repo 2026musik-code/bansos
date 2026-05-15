@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import fs from "fs";
+import { Readable } from "stream";
 import honoApp from "./src/hono-app.ts"; 
 
 // --- SIMULASI CLOUDFLARE KV & R2 UNTUK AI STUDIO ---
@@ -98,8 +99,12 @@ async function startServer() {
        response.headers.forEach((value, key) => res.setHeader(key, value));
        res.status(response.status);
        
-       const arrayBuffer = await response.arrayBuffer();
-       res.send(Buffer.from(arrayBuffer));
+       if (response.body) {
+           const nodeStream = Readable.fromWeb(response.body as any);
+           nodeStream.pipe(res);
+       } else {
+           res.end();
+       }
        
     } catch (e) {
        console.error('[Express] Hono Adapter Error:', e);

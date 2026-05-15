@@ -7,7 +7,7 @@ import Hls from 'hls.js';
 type ViewState = 'home' | 'details' | 'player' | 'history' | 'categories' | 'profile';
 
 // Simple HLS Player Component
-const HlsPlayer = ({ src, className, style, onEnded }: { src: string, className?: string, style?: any, onEnded?: () => void }) => {
+const HlsPlayer = ({ src, className, style, onEnded, subtitles = [] }: { src: string, className?: string, style?: any, onEnded?: () => void, subtitles?: any[] }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
@@ -38,7 +38,13 @@ const HlsPlayer = ({ src, className, style, onEnded }: { src: string, className?
     };
   }, [src]);
 
-  return <video ref={videoRef} className={className} style={style} controls playsInline onEnded={onEnded} />;
+  return (
+    <video ref={videoRef} className={className} style={style} controls playsInline onEnded={onEnded} crossOrigin="anonymous">
+       {subtitles.map((sub, i) => (
+         <track key={i} kind="subtitles" srcLang={sub.lang?.split('-')[0] || sub.lang} label={sub.label} src={sub.url} default={sub.label?.toLowerCase().includes('indonesia') || sub.label?.toLowerCase().includes('indo')} />
+       ))}
+    </video>
+  );
 };
 
 export default function App() {
@@ -69,6 +75,8 @@ export default function App() {
   const [showLimitPopup, setShowLimitPopup] = useState(false);
   const [showPlayerUI, setShowPlayerUI] = useState(true);
   const playerUiTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const [selectedQuality, setSelectedQuality] = useState<string | null>(null);
 
   const resetPlayerUiTimer = () => {
     setShowPlayerUI(true);
@@ -141,10 +149,26 @@ export default function App() {
           providerList = Object.keys(data).map(k => ({ id: k, name: data[k].name || k }));
         }
 
-        const allowed = ['reelshort', 'netshort', 'freereels', 'dotdrama', 'stardusttv', 'meloshort'];
-        const filteredProviders = providerList.filter(p => allowed.includes(String(p.id || p.name || p).toLowerCase()));
+        const domains: Record<string, string> = {
+          reelshort: 'reelshort.com',
+          netshort: 'netshort.com',
+          freereels: 'freereels.com',
+          dotdrama: 'vividshort.com',
+          stardusttv: 'stardusttv.cc',
+          meloshort: 'meloshort.com',
+          goodshort: 'goodshort.com',
+          dramabite: 'dramabite.com'
+        };
+        const allowed = Object.keys(domains);
+        const formatProvider = (id: string, name?: string) => ({
+           id,
+           name: name || id.charAt(0).toUpperCase() + id.slice(1),
+           icon: `https://www.google.com/s2/favicons?domain=${domains[id.toLowerCase()]}&sz=128`
+        });
+
+        const filteredProviders = providerList.filter(p => allowed.includes(String(p.id || p.name || p).toLowerCase())).map(p => formatProvider(p.id || p.name || p, p.name));
         
-        setProviders(filteredProviders.length > 0 ? filteredProviders : allowed.map(id => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1) })));
+        setProviders(filteredProviders.length > 0 ? filteredProviders : allowed.map(id => formatProvider(id)));
         
         if (filteredProviders.length > 0) {
           const defaultProv = filteredProviders.find(p => String(p.id | p.name | p).toLowerCase() === 'freereels') || filteredProviders[0];
@@ -154,8 +178,23 @@ export default function App() {
         }
       } catch (err) {
         console.error("Error fetching providers:", err);
-        const allowed = ['reelshort', 'netshort', 'freereels', 'dotdrama', 'stardusttv', 'meloshort'];
-        setProviders(allowed.map(id => ({ id, name: id.charAt(0).toUpperCase() + id.slice(1) })));
+        const domains: Record<string, string> = {
+          reelshort: 'reelshort.com',
+          netshort: 'netshort.com',
+          freereels: 'freereels.com',
+          dotdrama: 'vividshort.com',
+          stardusttv: 'stardusttv.cc',
+          meloshort: 'meloshort.com',
+          goodshort: 'goodshort.com',
+          dramabite: 'dramabite.com'
+        };
+        const allowed = Object.keys(domains);
+        const formatProvider = (id: string, name?: string) => ({
+           id,
+           name: name || id.charAt(0).toUpperCase() + id.slice(1),
+           icon: `https://www.google.com/s2/favicons?domain=${domains[id.toLowerCase()]}&sz=128`
+        });
+        setProviders(allowed.map(id => formatProvider(id)));
         setSelectedProvider('freereels');
       }
     };
@@ -230,7 +269,7 @@ export default function App() {
     });
     
     // Attempt to get the ID
-    const dramaId = drama.id || drama.link || drama.url || drama.fakeId || drama.videoFakeId;
+    const dramaId = drama.id || drama.shortPlayId || drama.link || drama.url || drama.fakeId || drama.videoFakeId;
     
     try {
       if (dramaId) {
@@ -290,6 +329,7 @@ export default function App() {
     setView('player');
     setIsLoadingStream(true);
     setStreamData(null);
+    setSelectedQuality(null);
     setCurrentEpisode(episode);
     
     // Determine episode ID
@@ -300,7 +340,6 @@ export default function App() {
       const res = await fetch(`/api/stream/${selectedProvider}?id=${encodeURIComponent(epId)}&deviceId=${encodeURIComponent(deviceId)}`);
       if (!res.ok && res.status === 403) {
            setLimitData((prev: any) => ({ ...prev, exceeded: true }));
-           setTimeout(() => setIsLimit(true), 100);
            setStreamData(null);
            return;
       }
@@ -384,12 +423,12 @@ export default function App() {
 
   // Helper to extract image
   const getImage = (item: any) => {
-    return item.thumb || item.thumbnail || item.poster || item.cover || item.image || item.img || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
+    return item.thumb || item.thumbnail || item.poster || item.coverImgUrl || item.cover || item.image || item.img || item.shortPlayCover || 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80';
   };
   
   // Helper to extract title
   const getTitle = (item: any) => {
-    return item.title || item.chapter_name || item.name || item.judul || (item.episode ? `Episode ${item.episode}` : undefined) || 'Unknown Title';
+    return item.title || item.shortPlayName || item.chapter_name || item.name || item.judul || (item.episode ? `Episode ${item.episode}` : undefined) || 'Unknown Title';
   };
 
   // Helper for episode title specifically
@@ -411,13 +450,34 @@ export default function App() {
   };
 
   // Helper to extract iframe or video URL
-  const getStreamUrl = (data: any) => {
+  const getStreamsList = (data: any) => {
+    if (!data) return [];
+    if (data.data?.streams && Array.isArray(data.data.streams)) return data.data.streams;
+    if (data.streams && Array.isArray(data.streams)) return data.streams;
+    return [];
+  };
+
+  const getSubtitles = (data: any) => {
+    if (!data) return [];
+    if (data.data?.subtitles && Array.isArray(data.data.subtitles)) return data.data.subtitles;
+    if (data.subtitles && Array.isArray(data.subtitles)) return data.subtitles;
+    return [];
+  };
+
+  const getStreamUrlOriginal = (data: any, qualityPref?: string | null) => {
     if (!data) return null;
     
     let url = null;
+    const streams = getStreamsList(data);
+    if (streams.length > 0) {
+      if (qualityPref) {
+        const matching = streams.find((s: any) => s.quality === qualityPref);
+        if (matching?.url) return matching.url;
+      }
+      return streams[0].url;
+    }
+    
     if (typeof data === 'string') url = data;
-    else if (data.data?.streams && Array.isArray(data.data.streams) && data.data.streams[0]?.url) url = data.data.streams[0].url;
-    else if (data.streams && Array.isArray(data.streams) && data.streams[0]?.url) url = data.streams[0].url;
     else if (data.data?.url) url = data.data.url;
     else if (data.data?.link) url = data.data.link;
     else if (data.data?.iframe) url = data.data.iframe;
@@ -451,6 +511,8 @@ export default function App() {
     const maybeUrl = Object.values(data).find(v => typeof v === 'string' && v.startsWith('http'));
     return maybeUrl as string || null;
   };
+
+  const getStreamUrl = (data: any) => getStreamUrlOriginal(data, selectedQuality);
 
   const isVideoFile = (url: string | null) => {
     if (!url) return false;
@@ -577,12 +639,17 @@ export default function App() {
                           <button
                             key={val + i}
                             onClick={() => setSelectedProvider(val)}
-                            className={`shrink-0 px-5 py-2.5 rounded-xl font-bold text-[10px] sm:text-xs tracking-wider transition-all border ${
+                            className={`shrink-0 px-4 sm:px-5 py-2.5 flex items-center gap-2 rounded-xl font-bold text-[10px] sm:text-xs tracking-wider transition-all border ${
                               isActive 
                                 ? 'bg-amber-500 text-black border-amber-500 shadow-[0_4px_15px_rgba(245,158,11,0.2)]' 
                                 : 'bg-[#161618] text-slate-400 border-white/5 hover:border-white/20'
                             }`}
                           >
+                            {p.icon && (
+                              <img src={p.icon} alt={display} 
+                                onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                className={`w-4 h-4 rounded-full object-cover ${isActive ? '' : 'opacity-70 grayscale'}`} />
+                            )}
                             {display}
                           </button>
                         );
@@ -817,12 +884,17 @@ export default function App() {
                             <button
                               key={`cat-prov-${val}-${i}`}
                               onClick={() => setSelectedProvider(val)}
-                              className={`shrink-0 px-4 py-2 rounded-xl font-bold text-[10px] sm:text-xs tracking-wider transition-all border ${
+                              className={`shrink-0 px-3 sm:px-4 py-2 flex items-center gap-2 rounded-xl font-bold text-[10px] sm:text-xs tracking-wider transition-all border ${
                                 isActive 
                                   ? 'bg-amber-500 text-black border-amber-500 shadow-[0_4px_15px_rgba(245,158,11,0.2)]' 
                                   : 'bg-[#161618] text-slate-400 border-white/5 hover:border-white/20'
                               }`}
                             >
+                              {p.icon && (
+                                <img src={p.icon} alt={display} 
+                                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                                  className={`w-4 h-4 rounded-full object-cover ${isActive ? '' : 'opacity-70 grayscale'}`} />
+                              )}
                               {display}
                             </button>
                           );
@@ -954,7 +1026,18 @@ export default function App() {
                       <X className="w-5 h-5" />
                     </button>
                   </div>
-                  <div className="pointer-events-auto">
+                  <div className="pointer-events-auto flex items-center gap-2">
+                    {getStreamsList(streamData).length > 1 && (
+                      <select 
+                        value={selectedQuality || getStreamsList(streamData)[0]?.quality || ''} 
+                        onChange={(e) => setSelectedQuality(e.target.value)}
+                        className="bg-black/60 backdrop-blur-md text-white text-xs px-3 py-2 rounded-full border border-white/20 outline-none"
+                      >
+                        {getStreamsList(streamData).map((s: any, i: number) => (
+                          <option key={i} value={s.quality} className="text-black">{s.quality}</option>
+                        ))}
+                      </select>
+                    )}
                     {getCurrentEpisodeIndex() !== -1 && getCurrentEpisodeIndex() < episodes.length - 1 && (
                       <button
                         onClick={handleNextEpisode}
@@ -984,6 +1067,7 @@ export default function App() {
                           src={getStreamUrl(streamData)!}
                           className="w-full h-full object-contain"
                           onEnded={handleNextEpisode}
+                          subtitles={getSubtitles(streamData)}
                         />
                       ) : (
                         <video 
@@ -991,9 +1075,14 @@ export default function App() {
                           src={getStreamUrl(streamData)!}
                           controls
                           playsInline
+                          crossOrigin="anonymous"
                           className="w-full h-full object-contain"
                           onEnded={handleNextEpisode}
-                        />
+                        >
+                           {getSubtitles(streamData).map((sub: any, i: number) => (
+                             <track key={i} kind="subtitles" srcLang={sub.lang?.split('-')[0] || sub.lang} label={sub.label} src={sub.url} default={sub.label?.toLowerCase().includes('indonesia') || sub.label?.toLowerCase().includes('indo')} />
+                           ))}
+                        </video>
                       )
                     ) : (
                       <iframe 

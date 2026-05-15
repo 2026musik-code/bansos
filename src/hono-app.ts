@@ -308,15 +308,23 @@ const fetchCutadAPI = async (url: string, c: any, shouldRewriteStream = false) =
       try {
         const json = JSON.parse(text);
         
-        const rewriteObj = async (obj: any) => {
+        const rewriteObj = async (obj: any, parentHeaders?: any) => {
           if (!obj) return;
+          const headers = obj.headers || parentHeaders;
           for (const key of Object.keys(obj)) {
-            if (typeof obj[key] === 'string' && obj[key].includes('.m3u8')) {
+            if (typeof obj[key] === 'string' && (obj[key].includes('.m3u8') || obj[key].includes('.mp4') || obj[key].includes('.srt'))) {
                const exp = Date.now() + 2 * 60 * 60 * 1000; // 2 hours
                const token = await generateToken(obj[key], exp);
-               obj[key] = `/api/cors-proxy?url=${encodeURIComponent(obj[key])}&exp=${exp}&token=${token}`;
+               let proxyUrl = `/api/cors-proxy?url=${encodeURIComponent(obj[key])}&exp=${exp}&token=${token}`;
+               if (headers?.Referer) {
+                 proxyUrl += `&req_ref=${encodeURIComponent(headers.Referer)}`;
+               }
+               if (headers?.Origin) {
+                 proxyUrl += `&req_ori=${encodeURIComponent(headers.Origin)}`;
+               }
+               obj[key] = proxyUrl;
             } else if (typeof obj[key] === 'object') {
-               await rewriteObj(obj[key]);
+               await rewriteObj(obj[key], headers);
             }
           }
         };
@@ -452,33 +460,53 @@ app.get('/api/cors-proxy', async (c) => {
            if (!isAllowedOrigin && !isDirectCurl && (origin || referer)) {
                return c.text("Access Denied: Unrecognized Origin", 403);
            }
-           if (!targetUrl.includes('.m3u8') && !targetUrl.includes('.ts') && !targetUrl.includes('.mp4')) {
+           if (!targetUrl.includes('.m3u8') && !targetUrl.includes('.ts') && !targetUrl.includes('.mp4') && !targetUrl.includes('.srt') && !targetUrl.includes('.vtt')) {
                return c.text("Token required for arbitrary proxy endpoints", 403);
            }
        }
   }
 
-  const response = await fetch(targetUrl, {
-    headers: {
+  const reqRef = c.req.query('req_ref');
+  const reqOri = c.req.query('req_ori');
+
+  const headersToUpstream: any = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': targetUrl.startsWith('http') ? new URL(targetUrl).origin : 'https://www.cutad.web.id/'
-    }
+      'Referer': reqRef || (targetUrl.startsWith('http') ? new URL(targetUrl).origin : 'https://www.cutad.web.id/')
+  };
+  
+  if (reqOri) {
+      headersToUpstream['Origin'] = reqOri;
+  }
+  
+  if (c.req.header('Range')) {
+      headersToUpstream['Range'] = c.req.header('Range');
+  }
+
+  const response = await fetch(targetUrl, {
+    headers: headersToUpstream
   });
   
   const headers = new Headers();
   const contentType = response.headers.get("content-type");
   if (contentType) headers.set("Content-Type", contentType);
   headers.set("Access-Control-Allow-Origin", "*");
+  if (response.headers.get("Accept-Ranges")) headers.set("Accept-Ranges", response.headers.get("Accept-Ranges")!);
+  if (response.headers.get("Content-Range")) headers.set("Content-Range", response.headers.get("Content-Range")!);
+  if (response.headers.get("Content-Length")) headers.set("Content-Length", response.headers.get("Content-Length")!);
 
   if (targetUrl.includes(".m3u8")) {
     const text = await response.text();
     const baseUrl = new URL(".", targetUrl).href;
 
     const lines = await Promise.all(text.split('\n').map(async line => {
+      let extra = '';
+      if (reqRef) extra += `&req_ref=${encodeURIComponent(reqRef)}`;
+      if (reqOri) extra += `&req_ori=${encodeURIComponent(reqOri)}`;
+      
       if (line.trim() && !line.startsWith("#")) {
         const segmentUrl = line.startsWith("http") ? line : new URL(line.trim(), baseUrl).href;
         const subToken = await generateToken(segmentUrl, 0);
-        return `/api/cors-proxy?url=${encodeURIComponent(segmentUrl)}&t=${subToken}`;
+        return `/api/cors-proxy?url=${encodeURIComponent(segmentUrl)}&t=${subToken}${extra}`;
       }
       if (line.includes('URI="')) {
         // Handle sync/async logic carefully here, replacing is sync but generator is async.
@@ -487,13 +515,18 @@ app.get('/api/cors-proxy', async (c) => {
         if (match && !match[1].startsWith("data:")) {
            const uri = match[1].startsWith("http") ? match[1] : new URL(match[1], baseUrl).href;
            const subToken = await generateToken(uri, 0);
-           return line.replace(/URI="[^"]+"/, `URI="/api/cors-proxy?url=${encodeURIComponent(uri)}&t=${subToken}"`);
+           return line.replace(/URI="[^"]+"/, `URI="/api/cors-proxy?url=${encodeURIComponent(uri)}&t=${subToken}${extra}"`);
         }
       }
       return line;
     }));
     
     return new Response(lines.join('\n'), { headers, status: response.status });
+  } else if (targetUrl.includes(".srt")) {
+    const text = await response.text();
+    let vtt = "WEBVTT\n\n" + text.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2'); // SRT , to VTT . for ms
+    headers.set("Content-Type", "text/vtt; charset=utf-8");
+    return new Response(vtt, { headers, status: response.status });
   }
 
   return new Response(response.body, { headers, status: response.status });
