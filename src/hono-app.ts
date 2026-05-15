@@ -202,16 +202,10 @@ app.post('/api/track', async (c) => {
   
   const config = await getConfig(c.env);
   
-  let user = null;
-  // Coba cari dng deviceId dulu (lebih persisten dari IP)
-  if (deviceId) {
-    user = config.users.find((u: any) => u.deviceId === deviceId);
-  }
-  
-  // Fallback ke IP + UserAgent jika tidak ada cookie/deviceId (mirip sistem lama)
-  if (!user) {
-    user = config.users.find((u: any) => u.ip === realIp && u.userAgent === userAgent);
-  }
+  let user = config.users.find((u: any) => 
+    (deviceId && u.deviceId === deviceId) || 
+    (u.ip === realIp)
+  );
   
   if (!user) {
     user = {
