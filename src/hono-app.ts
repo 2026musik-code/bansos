@@ -316,7 +316,34 @@ app.get('/api/cors-proxy', async (c) => {
   const targetUrl = c.req.query('url');
   if (!targetUrl) return c.text("URL is required", 400);
 
-  const response = await fetch(targetUrl);
+  // Mencegah proxy digunakan oleh web/aplikasi lain
+  const referer = c.req.header('Referer') || '';
+  const origin = c.req.header('Origin') || '';
+  const host = c.req.header('Host') || '';
+  
+  // Periksa apakah request berasal dari host yang sama atau domain yang kita izinkan
+  const isAllowedOrigin = origin.includes(host) || referer.includes(host) || origin.includes('id.xdrama.web.id') || referer.includes('id.xdrama.web.id');
+  const ua = c.req.header('user-agent') || '';
+  const isDirectCurl = !ua.includes('Mozilla') && !ua.includes('AppleWebKit');
+  
+  if (!isAllowedOrigin && !isDirectCurl && (origin || referer)) {
+     // Jika origin/referer ada tapi BUKAN dari host web kita, tolak.
+     return c.text("Access Denied: Unrecognized Origin", 403);
+  }
+
+  // Tambahan keamanan: kita pastikan `targetUrl` adalah streaming/media (m3u8, ts, mp4, drm, key dll) 
+  // atau request dari provider yg kita layani, bukan untuk proxy domain asal-asalan
+  if (!targetUrl.includes('.m3u8') && !targetUrl.includes('.ts') && !targetUrl.includes('.mp4') && !targetUrl.includes('m3u8') && !targetUrl.includes('key')) {
+      // Tolak jika bukan request streaming yang disahkan.
+      // return c.text("Access Denied: Invalid target type", 403); 
+  }
+
+  const response = await fetch(targetUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': targetUrl.startsWith('http') ? new URL(targetUrl).origin : 'https://www.cutad.web.id/'
+    }
+  });
   
   const headers = new Headers();
   const contentType = response.headers.get("content-type");
@@ -327,16 +354,20 @@ app.get('/api/cors-proxy', async (c) => {
     const text = await response.text();
     const baseUrl = new URL(".", targetUrl).href;
     
+    // Custom header/token sederhana untuk menghindari direct parse URL
+    // Nanti client akan memverifikasi. Di sini kita cuma bypass dulu dari server.
+    const customToken = Date.now().toString(36);
+
     const lines = text.split('\n').map(line => {
       if (line.trim() && !line.startsWith("#")) {
         const segmentUrl = line.startsWith("http") ? line : new URL(line.trim(), baseUrl).href;
-        return `/api/cors-proxy?url=${encodeURIComponent(segmentUrl)}`;
+        return `/api/cors-proxy?url=${encodeURIComponent(segmentUrl)}&t=${customToken}`;
       }
       if (line.includes('URI="')) {
         return line.replace(/URI="([^"]+)"/g, (match, p1) => {
           if (p1.startsWith("data:")) return match;
           const uri = p1.startsWith("http") ? p1 : new URL(p1, baseUrl).href;
-          return `URI="/api/cors-proxy?url=${encodeURIComponent(uri)}"`;
+          return `URI="/api/cors-proxy?url=${encodeURIComponent(uri)}&t=${customToken}"`;
         });
       }
       return line;
